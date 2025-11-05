@@ -1,0 +1,5 @@
+[user]
+	email = ds.suchanka@gmail.com
+	name = Sorbieskis
+[credential]
+	helper = !'/mnt/c/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/TeamFoundation/Team Explorer/Git/mingw64/bin/git-credential-manager.exe'
