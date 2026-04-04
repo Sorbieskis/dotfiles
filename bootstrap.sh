@@ -38,7 +38,7 @@ $SUDO xbps-install -Sy \
     zellij \
     neovim \
     yazi \
-    ffmpegthumbnailer poppler imagemagick \
+    ffmpegthumbnailer poppler ImageMagick \
     eza fd bat \
     ripgrep jq tokei \
     git lazygit \
