@@ -13,7 +13,8 @@ mcfly init fish | source
 fzf --fish | source
 zoxide init fish | source
 
-set PATH $PATH $HOME/.local/bin
+fish_add_path $HOME/.local/bin
+fish_add_path $HOME/.cargo/bin
 
 # Secrets (API keys etc.) — kept in a separate untracked file
 if test -f ~/.config/fish/secrets.fish

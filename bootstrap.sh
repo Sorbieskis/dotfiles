@@ -63,7 +63,7 @@ fi
 # Claude Code
 if ! command -v claude > /dev/null 2>&1; then
     echo "==> Installing Claude Code..."
-    npm install -g @anthropic-ai/claude-code
+    $SUDO npm install -g @anthropic-ai/claude-code
 fi
 
 # Clone dotfiles
@@ -104,11 +104,6 @@ if ! grep -qF "$FISH_PATH" /etc/shells 2>/dev/null; then
 fi
 echo "==> Setting fish as default shell..."
 chsh -s "$FISH_PATH"
-
-# Cargo bin in PATH permanently — add to fish config if not already there
-if ! grep -q "cargo/bin" "$HOME/.config/fish/config.fish" 2>/dev/null; then
-    echo 'set PATH $PATH $HOME/.cargo/bin' >> "$HOME/.config/fish/config.fish"
-fi
 
 # Update tldr cache
 tldr --update || true
