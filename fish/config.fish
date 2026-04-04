@@ -1,7 +1,9 @@
 set -x EDITOR nvim
 
-# Podman socket for lazydocker/docker-compatible tools
-set -gx DOCKER_HOST "unix://$XDG_RUNTIME_DIR/podman/podman.sock"
+# Podman socket — only set if podman is installed
+if command -q podman
+    set -gx DOCKER_HOST "unix://$XDG_RUNTIME_DIR/podman/podman.sock"
+end
 
 # Enable vi mode in fish
 fish_vi_key_bindings
