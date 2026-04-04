@@ -42,7 +42,7 @@ $SUDO xbps-install -Sy \
     eza fd bat \
     ripgrep jq tokei \
     git lazygit \
-    btop \
+    btop fastfetch \
     nodejs uv \
     tealdeer wget curl openssh \
     shadow \
