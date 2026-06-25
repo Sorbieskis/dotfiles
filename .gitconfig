@@ -8,3 +8,16 @@
 # (git@github.com:...), which don't need a credential helper at all.
 [credential]
 	helper = "!gcm='/mnt/c/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/TeamFoundation/Team Explorer/Git/mingw64/bin/git-credential-manager.exe'; test -x \"$gcm\" && exec \"$gcm\""
+# git-delta for diffs/pager. Falls back gracefully (|| less / || cat) on any
+# machine where delta isn't installed, so this stays safe across WSL + the VPS.
+[core]
+	pager = delta 2>/dev/null || less
+[interactive]
+	diffFilter = delta --color-only 2>/dev/null || cat
+[delta]
+	navigate = true
+	line-numbers = true
+[merge]
+	conflictstyle = zdiff3
+[diff]
+	colorMoved = default
