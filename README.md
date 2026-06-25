@@ -8,6 +8,8 @@ Personal configuration files for my development environment.
 - **.gitconfig** - Git identity and settings
 - **.wezterm.lua** - WezTerm terminal keybindings
 - **fish/** - Fish shell configuration with vi mode, starship, mcfly, fzf, zoxide
+- **zellij/** - Zellij config + `layouts/main.kdl` (persistent Claude Code session)
+- **systemd/user/** + **bin/** - `zellij-main.service` auto-restores the `main` session after reboot (see below)
 
 ## How It Works (Symlinks)
 
@@ -205,6 +207,34 @@ git log                    # Find the commit you want
 git checkout <commit-hash> -- fish/config.fish
 git commit -m "Restore fish config"
 git push
+```
+
+## Persistent zellij + Claude Code session (systemd)
+
+On servers that reboot periodically (e.g. the Hetzner VPS — kernel maintenance),
+a reboot kills every process including any zellij session and the Claude Code
+running inside it. These three files bring it back automatically:
+
+| File | Role |
+|---|---|
+| `zellij/layouts/main.kdl` | Layout: a `claude` tab that runs `claude --continue` in `~/dev/osnova-product`, plus a shell tab |
+| `bin/zellij-main-boot.sh` | Recreates the `main` session **detached** from that layout (idempotent; skips if already running) |
+| `systemd/user/zellij-main.service` | Runs the boot script at startup |
+
+`bootstrap.sh` symlinks all three into place and (on systemd hosts only) enables
+**linger** + the user service so it starts at boot without an active login. On
+non-systemd boxes (Void/runit) the service step is skipped automatically.
+
+After a reboot: SSH in and `zellij attach main` — the Claude Code conversation is
+already resumed. This restores *terminal* state; the conversation itself persists
+via Claude Code's own history (`claude --continue`), independent of zellij.
+
+To set up manually (without re-running bootstrap):
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now zellij-main.service
+loginctl enable-linger "$USER"   # so it starts at boot without a login
 ```
 
 ## Notes

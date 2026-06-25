@@ -90,6 +90,26 @@ ln -sf  "$DOTFILES_DIR/.gitconfig"        "$HOME/.gitconfig"
 # dirtying the dotfiles repo
 cp "$DOTFILES_DIR/zellij/config.kdl" "$HOME/.config/zellij/config.kdl"
 
+# Zellij layouts (symlinked — no per-platform patching needed)
+mkdir -p "$HOME/.config/zellij/layouts"
+ln -sf "$DOTFILES_DIR/zellij/layouts/main.kdl" "$HOME/.config/zellij/layouts/main.kdl"
+
+# Persistent "main" zellij+Claude session that auto-restores after reboot.
+# systemd-only (Void uses runit) — guarded so this is a no-op elsewhere.
+mkdir -p "$HOME/.local/bin"
+chmod +x "$DOTFILES_DIR/bin/zellij-main-boot.sh"
+ln -sf "$DOTFILES_DIR/bin/zellij-main-boot.sh" "$HOME/.local/bin/zellij-main-boot.sh"
+if command -v systemctl > /dev/null 2>&1; then
+    echo "==> Installing zellij-main user service (auto-restore after reboot)..."
+    mkdir -p "$HOME/.config/systemd/user"
+    ln -sf "$DOTFILES_DIR/systemd/user/zellij-main.service" \
+        "$HOME/.config/systemd/user/zellij-main.service"
+    # linger lets the user service start at boot without an active login session
+    $SUDO loginctl enable-linger "$(id -un)" || true
+    systemctl --user daemon-reload || true
+    systemctl --user enable zellij-main.service || true
+fi
+
 if [ "$ORBSTACK" = "1" ]; then
     echo "==> OrbStack detected — setting pbcopy as clipboard command..."
     sed -i 's|// copy_command "pbcopy".*|copy_command "pbcopy"              // osx|' \

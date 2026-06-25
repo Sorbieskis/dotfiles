@@ -1,0 +1,14 @@
+[Unit]
+Description=Persistent zellij 'main' session with Claude Code (auto-resume after reboot)
+After=default.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=%h/.local/bin/zellij-main-boot.sh
+# No ExecStop on purpose: stopping/disabling the service must NOT tear down a
+# session you're actively using. A reboot ends the session on its own; recovery
+# is handled by ExecStart.
+
+[Install]
+WantedBy=default.target

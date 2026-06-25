@@ -1,0 +1,22 @@
+// Auto-recovery layout for the persistent "main" session.
+// On boot, the systemd user service (zellij-main.service) loads this so that
+// Claude Code comes back automatically after a reboot. The CC pane runs
+// `claude --continue` to resume the last conversation in that project; if there
+// is none, it drops into an interactive shell instead of dying.
+//
+// Path/command below are tailored to the Osnova VPS — adjust the cwd for other
+// machines.
+layout {
+    tab name="claude" focus=true {
+        pane {
+            cwd "/home/dima/dev/osnova-product"
+            command "fish"
+            args "-i" "-c" "claude --continue --dangerously-skip-permissions; exec fish"
+        }
+    }
+    tab name="shell" {
+        pane {
+            cwd "/home/dima"
+        }
+    }
+}
