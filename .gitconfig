@@ -1,5 +1,10 @@
 [user]
 	email = ds.suchanka@gmail.com
 	name = Sorbieskis
+# Git Credential Manager lives on Windows and is reached from WSL via /mnt/c.
+# Guard with `test -x` so the helper only runs where that binary actually
+# exists — on native Linux (e.g. the VPS) it no-ops instead of crashing with
+# "git-credential-manager.exe: not found". On Linux, use SSH remotes for GitHub
+# (git@github.com:...), which don't need a credential helper at all.
 [credential]
-	helper = !'/mnt/c/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/TeamFoundation/Team Explorer/Git/mingw64/bin/git-credential-manager.exe'
+	helper = "!gcm='/mnt/c/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/TeamFoundation/Team Explorer/Git/mingw64/bin/git-credential-manager.exe'; test -x \"$gcm\" && exec \"$gcm\""
