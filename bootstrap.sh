@@ -104,10 +104,13 @@ if command -v systemctl > /dev/null 2>&1; then
     mkdir -p "$HOME/.config/systemd/user"
     ln -sf "$DOTFILES_DIR/systemd/user/zellij-main.service" \
         "$HOME/.config/systemd/user/zellij-main.service"
+    ln -sf "$DOTFILES_DIR/systemd/user/zellij-main.timer" \
+        "$HOME/.config/systemd/user/zellij-main.timer"
     # linger lets the user service start at boot without an active login session
     $SUDO loginctl enable-linger "$(id -un)" || true
     systemctl --user daemon-reload || true
     systemctl --user enable zellij-main.service || true
+    systemctl --user enable --now zellij-main.timer || true
 fi
 
 if [ "$ORBSTACK" = "1" ]; then

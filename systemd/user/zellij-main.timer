@@ -1,0 +1,9 @@
+[Unit]
+Description=Self-heal timer for the persistent zellij 'main' session
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+
+[Install]
+WantedBy=timers.target

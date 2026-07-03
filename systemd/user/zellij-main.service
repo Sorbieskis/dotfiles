@@ -4,7 +4,9 @@ After=default.target
 
 [Service]
 Type=oneshot
-RemainAfterExit=yes
+# No RemainAfterExit: the unit returns to inactive after each run so that
+# zellij-main.timer can re-trigger it periodically (self-heal if 'main' dies
+# between reboots; the boot script is a no-op while the session is alive).
 ExecStart=%h/.local/bin/zellij-main-boot.sh
 # No ExecStop on purpose: stopping/disabling the service must NOT tear down a
 # session you're actively using. A reboot ends the session on its own; recovery
