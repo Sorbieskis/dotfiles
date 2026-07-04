@@ -60,15 +60,18 @@ end
 alias kimi="claudekimi"
 
 # proj            — list projects in ~/dev
-# proj <name>     — open a zellij tab in ~/dev/<name> (creates the dir if new);
-#                   outside zellij it just cd's there. Nothing else happens.
+# proj <name>     — open a zellij tab in ~/dev/<name>; outside zellij, cd there.
+#                   Never creates anything: `mkdir ~/dev/<name>` to start a project.
 function proj
     if test (count $argv) -eq 0
         ls -1 ~/dev
         return
     end
     set -l dir ~/dev/$argv[1]
-    test -d $dir; or mkdir -p $dir
+    if not test -d $dir
+        echo "proj: no project '$argv[1]' in ~/dev  (mkdir ~/dev/$argv[1] to start one)" >&2
+        return 1
+    end
     if set -q ZELLIJ
         zellij action new-tab --name $argv[1] --cwd $dir
     else
