@@ -21,3 +21,22 @@
 	conflictstyle = zdiff3
 [diff]
 	colorMoved = default
+# Work identity for ~/dev/asml/ — MUST stay last: includes apply in order and the
+# last writer wins, so moving this above [user] would let the personal email win
+# inside work repos. A missing ~/.gitconfig-asml is silently ignored by git, so
+# this stays inert (not broken) on machines without the work checkout — which is
+# why the file itself is NOT tracked here.
+# Trailing slash matters: it matches every repo BELOW the directory.
+[includeIf "gitdir:~/dev/asml/"]
+	path = ~/.gitconfig-asml
+# Global (NOT directory-scoped) on purpose: this is the only rewrite that can fire
+# during `git clone`, where the includeIf above cannot — a clone has no gitdir yet.
+# Narrowed to the dsuchank/* namespace so it can never touch Sorbieskis repos, and
+# git prefers the LONGEST matching insteadOf, so it also wins over the broader rule
+# in ~/.gitconfig-asml without conflicting with it.
+# Net effect: `git clone git@github.com:dsuchank/foo` picks the work key anywhere,
+# with no alias to remember.
+[url "git@github-asml:dsuchank/"]
+	insteadOf = git@github.com:dsuchank/
+	insteadOf = ssh://git@github.com/dsuchank/
+	insteadOf = https://github.com/dsuchank/
