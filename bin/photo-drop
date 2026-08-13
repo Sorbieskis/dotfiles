@@ -5,17 +5,25 @@ A terminal SSH session (Termius on the phone) cannot accept an image, so this
 serves an upload page on the TAILSCALE IP — private to the tailnet, never
 public, same posture as Dockge.
 
-Every upload gets a monotonic sequence number, so ordering is a property of the
-NAME rather than of mtimes (which `cp -a`, rsync and a restore all preserve or
-mangle independently). Ask Claude for "drop 7" or "the newest".
+Uploads are grouped into BATCHES — one "tap to pick" selection is one batch —
+because the useful unit is rarely a lone photo: it is three screenshots of the
+same bug, or a machine plus its rating plate. Each batch is a numbered
+directory, so "look at drop 7" names a set, and the shots keep the order you
+picked them in.
 
-  ~/drop/0007-kitchen.jpg   stored file: <seq>-<original name>
-  ~/drop/latest             symlink -> the newest upload
-  ~/drop/index.tsv          append-only: seq, ISO time, bytes, original name
+A batch can carry a NOTE, and the note is the point of the page as much as the
+photos are: a phone keyboard beats typing context into a terminal over SSH.
+"the save button does nothing on mobile" lands next to the screenshots instead
+of being retyped one-handed at a shell prompt.
+
+  ~/drop/0007/note.md        what you typed (absent if you typed nothing)
+  ~/drop/0007/1-IMG_x.jpg    photos, numbered in the order you picked them
+  ~/drop/latest              symlink -> the newest batch directory
+  ~/drop/index.tsv           append-only: batch, ISO time, files, bytes
 
 Uploads are raw PUT bodies, not multipart form data: Python 3.13 removed the
 `cgi` module, which was the stdlib's only multipart parser. The page's JS reads
-the file and PUTs the bytes, so the server just writes the request body.
+each file and PUTs the bytes, so the server just writes the request body.
 
 Normally runs as a user service (photo-drop.service). Run by hand for a
 different port or directory:
@@ -38,11 +46,16 @@ from urllib.parse import unquote
 
 DEST: pathlib.Path
 INDEX: pathlib.Path
-SEQ_LOCK = threading.Lock()
-SEQ = 0
+LOCK = threading.Lock()
+BATCH = 0
+# Client-generated token -> batch dir, so every file from one selection lands
+# together. Bounded: a phone left on the page for days must not grow this.
+TOKENS: dict[str, pathlib.Path] = {}
+TOKEN_CAP = 64
 
 MAX_BYTES = 64 * 1024 * 1024
-SHOWN = 12  # recent uploads rendered on the page
+MAX_NOTE = 8000
+SHOWN = 8  # batches rendered on the page
 
 PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -56,42 +69,77 @@ PAGE = """<!doctype html>
            margin-bottom:1.25rem; }
   h1 { font-size:1rem; margin:0; color:#7fd3e0; letter-spacing:.04em;
        text-transform:uppercase; font-weight:600; }
-  .count { font:12px ui-monospace,monospace; color:#8b98a5; }
-  label.drop { display:block; padding:2rem 1rem; text-align:center; cursor:pointer;
-         border:1px dashed #3a4753; background:#161c22;
-         font-weight:500; letter-spacing:.01em; }
-  label.drop:active { background:#1b232b; border-color:#7fd3e0; }
-  label.drop span { color:#7fd3e0; }
+  .dest { font:12px ui-monospace,monospace; color:#8b98a5; }
+  label.pick { display:block; padding:2rem 1rem; text-align:center; cursor:pointer;
+         border:1px dashed #3a4753; background:#161c22; font-weight:500; }
+  label.pick:active { background:#1b232b; border-color:#7fd3e0; }
+  label.pick span { color:#7fd3e0; }
   input[type=file] { display:none; }
-  #log { margin:1rem 0 0; font:13px/1.8 ui-monospace,monospace; }
+  #log { margin:.75rem 0 0; font:13px/1.8 ui-monospace,monospace; }
   .ok { color:#7fc7a3; } .err { color:#e5806b; } .pend { color:#8b98a5; }
+  #notebox { display:none; margin-top:1rem; }
+  #notebox.on { display:block; }
+  textarea { width:100%; min-height:5.5rem; padding:.7rem; background:#161c22;
+             color:#e6edf3; border:1px solid #3a4753; border-radius:0;
+             font:15px/1.5 system-ui,sans-serif; resize:vertical; }
+  textarea:focus { outline:none; border-color:#7fd3e0; }
+  .row { display:flex; gap:.5rem; margin-top:.5rem; align-items:center; }
+  button { flex:0 0 auto; padding:.6rem 1.1rem; background:#7fd3e0; color:#0d1216;
+           border:0; font:600 14px system-ui,sans-serif; cursor:pointer; }
+  button:disabled { background:#3a4753; color:#8b98a5; }
+  .hint { font:12px ui-monospace,monospace; color:#8b98a5; }
   h2 { font-size:.75rem; text-transform:uppercase; letter-spacing:.08em;
        color:#8b98a5; font-weight:600; margin:2rem 0 .75rem;
        border-top:1px solid #232c35; padding-top:1rem; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr));
-          gap:.6rem; }
-  figure { margin:0; background:#161c22; border:1px solid #232c35; }
-  figure img { width:100%; aspect-ratio:1; object-fit:cover; display:block; }
-  figcaption { padding:.4rem .5rem; font:11px/1.4 ui-monospace,monospace;
-               color:#8b98a5; display:flex; justify-content:space-between; gap:.5rem; }
-  figcaption b { color:#7fd3e0; font-weight:600; }
-  figcaption span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .batch { margin-bottom:1.25rem; }
+  .bhead { display:flex; align-items:baseline; gap:.5rem; margin-bottom:.4rem; }
+  .bhead b { color:#7fd3e0; font:600 13px ui-monospace,monospace; }
+  .bhead .meta { font:11px ui-monospace,monospace; color:#5c6875; }
+  .bnote { font-size:14px; color:#c9d4de; margin:.1rem 0 .5rem;
+           border-left:2px solid #3a4753; padding-left:.6rem; white-space:pre-wrap; }
+  .shots { display:grid; grid-template-columns:repeat(auto-fill,minmax(96px,1fr));
+           gap:.4rem; }
+  .shots img { width:100%; aspect-ratio:1; object-fit:cover; display:block;
+               background:#161c22; border:1px solid #232c35; }
   .empty { color:#5c6875; font:13px ui-monospace,monospace; }
 </style>
 <header>
   <h1>drop</h1>
-  <div class="count">__DEST__</div>
+  <div class="dest">__DEST__</div>
 </header>
-<label class="drop">
+
+<label class="pick">
   <input type="file" accept="image/*" multiple onchange="send(this.files)">
   tap to pick <span>photos</span>
 </label>
 <div id="log"></div>
+
+<div id="notebox">
+  <textarea id="note" placeholder="what am I looking at? (optional)"></textarea>
+  <div class="row">
+    <button id="save" onclick="saveNote()">save note</button>
+    <span class="hint" id="notehint"></span>
+  </div>
+</div>
+
 <h2>recent</h2>
-<div class="grid" id="grid">__RECENT__</div>
+<div id="grid">__RECENT__</div>
+
 <script>
 const log = document.getElementById('log');
+const notebox = document.getElementById('notebox');
+const hint = document.getElementById('notehint');
+let token = null, batchNo = null;
+
+function newToken() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
 async function send(files) {
+  if (!files.length) return;
+  // One selection = one batch. A fresh token each time, so picking again after
+  // saving a note starts a new group rather than appending to the old one.
+  token = newToken();
   let ok = 0;
   for (const f of files) {
     const line = document.createElement('div');
@@ -99,47 +147,111 @@ async function send(files) {
     line.textContent = '\\u00b7\\u00b7\\u00b7 ' + f.name;
     log.prepend(line);
     try {
-      const r = await fetch('/u/' + encodeURIComponent(f.name),
+      const r = await fetch('/u/' + token + '/' + encodeURIComponent(f.name),
                             { method: 'PUT', body: f });
       const t = (await r.text()).trim();
       line.className = r.ok ? 'ok' : 'err';
       line.textContent = (r.ok ? '\\u2713 ' : '\\u2717 ') + t;
-      if (r.ok) ok++;
+      if (r.ok) { ok++; batchNo = t.split(' ')[0]; }
     } catch (e) {
       line.className = 'err';
       line.textContent = '\\u2717 ' + f.name + ' \\u2014 ' + e;
     }
   }
-  if (ok) refresh();
+  if (ok) {
+    notebox.classList.add('on');
+    hint.textContent = 'batch ' + batchNo;
+    document.getElementById('note').focus();
+    refresh();
+  }
 }
+
+async function saveNote() {
+  const el = document.getElementById('note'), btn = document.getElementById('save');
+  if (!token || !el.value.trim()) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch('/note/' + token, { method: 'PUT', body: el.value });
+    hint.textContent = r.ok ? 'saved to batch ' + batchNo : 'failed';
+    if (r.ok) { el.value = ''; notebox.classList.remove('on'); refresh(); }
+  } catch (e) { hint.textContent = 'failed: ' + e; }
+  btn.disabled = false;
+}
+
 async function refresh() {
   try {
     const r = await fetch('/api/list');
-    const items = await r.json();
-    document.getElementById('grid').innerHTML = items.map(i =>
-      '<figure><img loading="lazy" src="/f/' + encodeURIComponent(i.stored) + '">' +
-      '<figcaption><b>' + i.seq + '</b><span>' + i.kb + ' KB</span></figcaption></figure>'
+    const b = await r.json();
+    document.getElementById('grid').innerHTML = b.map(x =>
+      '<div class="batch"><div class="bhead"><b>' + x.batch + '</b>' +
+      '<span class="meta">' + x.files.length + ' shot' +
+      (x.files.length === 1 ? '' : 's') + ' \\u00b7 ' + x.when + '</span></div>' +
+      (x.note ? '<div class="bnote">' + esc(x.note) + '</div>' : '') +
+      '<div class="shots">' + x.files.map(f =>
+        '<img loading="lazy" src="/f/' + x.batch + '/' + encodeURIComponent(f) + '">'
+      ).join('') + '</div></div>'
     ).join('') || '<div class="empty">nothing yet</div>';
   } catch (e) { /* page still works without the refresh */ }
+}
+function esc(s) {
+  return s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 }
 </script>
 """
 
 
-def recent(limit=SHOWN):
-    """Newest-first view of the drop dir, read off the filenames.
+def safe(name, fallback="image"):
+    """Filenames from a client are hostile input.
 
-    Deliberately NOT read from index.tsv: the files on disk are the truth, so a
-    deleted photo disappears from the page instead of 404-ing a dead thumbnail.
+    basename() then a character whitelist: a traversal like ../../.ssh/id_ed25519
+    would otherwise be a write primitive for anyone on the tailnet.
+    """
+    raw = os.path.basename(unquote(name))
+    return re.sub(r"[^A-Za-z0-9._-]", "_", raw)[-72:].lstrip(".") or fallback
+
+
+def batches(limit=SHOWN):
+    """Newest-first view, read off the directories rather than the index.
+
+    The files on disk are the truth, so a batch you delete disappears from the
+    page instead of leaving dead thumbnails behind.
     """
     out = []
-    for p in DEST.iterdir():
-        m = re.match(r"(\d{4,})-(.*)", p.name)
-        if m and p.is_file() and not p.is_symlink():
-            out.append({"seq": int(m.group(1)), "stored": p.name,
-                        "name": m.group(2), "kb": p.stat().st_size // 1024})
-    out.sort(key=lambda i: i["seq"], reverse=True)
+    for d in DEST.iterdir():
+        if not d.is_dir() or not re.fullmatch(r"\d{4,}", d.name):
+            continue
+        shots = sorted((p.name for p in d.iterdir()
+                        if p.is_file() and p.name != "note.md"),
+                       key=lambda n: (int(m.group(1)) if (m := re.match(r"(\d+)-", n)) else 0, n))
+        note = ""
+        note_path = d / "note.md"
+        if note_path.exists():
+            note = note_path.read_text(errors="replace")[:MAX_NOTE]
+        when = datetime.datetime.fromtimestamp(d.stat().st_mtime).strftime("%H:%M")
+        out.append({"batch": d.name, "files": shots, "note": note, "when": when})
+    out.sort(key=lambda b: b["batch"], reverse=True)
     return out[:limit]
+
+
+def batch_for(token):
+    """Map a client token to a batch dir, allocating one on first sight."""
+    global BATCH
+    with LOCK:
+        if token in TOKENS:
+            return TOKENS[token]
+        BATCH += 1
+        d = DEST / f"{BATCH:04d}"
+        d.mkdir(exist_ok=True)
+        TOKENS[token] = d
+        if len(TOKENS) > TOKEN_CAP:
+            for k in list(TOKENS)[:-TOKEN_CAP]:
+                TOKENS.pop(k, None)
+
+        link, tmp = DEST / "latest", DEST / ".latest.tmp"
+        tmp.unlink(missing_ok=True)
+        tmp.symlink_to(d.name)
+        tmp.replace(link)  # atomic: `latest` is never briefly missing
+        return d
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -156,14 +268,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except BrokenPipeError:
             pass  # phone navigated away mid-thumbnail; not worth a traceback
 
+    def _body(self, cap):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            return None, "bad length"
+        if length <= 0:
+            return None, "empty"
+        if length > cap:
+            return None, f"over {cap // 1024 // 1024} MB"
+        remaining, chunks = length, []
+        while remaining:
+            chunk = self.rfile.read(min(remaining, 1 << 16))
+            if not chunk:
+                return None, "truncated upload"
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks), None
+
     def do_GET(self):
         if self.path == "/":
-            items = recent()
-            cards = "".join(
-                f'<figure><img loading="lazy" src="/f/{html.escape(i["stored"])}">'
-                f'<figcaption><b>{i["seq"]}</b><span>{i["kb"]} KB</span></figcaption></figure>'
-                for i in items
-            ) or '<div class="empty">nothing yet</div>'
             # Plain .replace(), NOT %-formatting or .format(): the template is
             # CSS + JS, so it is full of `width:100%` and `{ }` that both of
             # those would try to interpret. (It did — `%;` raised ValueError on
@@ -172,77 +296,81 @@ class Handler(http.server.BaseHTTPRequestHandler):
             page = (PAGE
                     .replace("__DEST__", html.escape(
                         str(DEST).replace(str(pathlib.Path.home()), "~")))
-                    .replace("__RECENT__", cards))
+                    .replace("__RECENT__", render(batches())))
             return self._reply(200, page, "text/html; charset=utf-8")
 
         if self.path == "/api/list":
-            return self._reply(200, json.dumps(recent()), "application/json")
+            return self._reply(200, json.dumps(batches()), "application/json")
 
         if self.path.startswith("/f/"):
-            name = os.path.basename(unquote(self.path[3:]))
-            path = DEST / name
+            parts = self.path[3:].split("/")
+            if len(parts) != 2:
+                return self._reply(404, "not found")
+            path = DEST / safe(parts[0]) / safe(parts[1])
             # resolve() before the parent check: a symlink pointing outside the
             # drop dir would otherwise serve arbitrary files to the tailnet.
-            if not path.is_file() or path.resolve().parent != DEST.resolve():
+            if not path.is_file() or not path.resolve().is_relative_to(DEST.resolve()):
                 return self._reply(404, "not found")
-            ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
+            ctype = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
             return self._reply(200, path.read_bytes(), ctype)
 
         self._reply(404, "not found")
 
     def do_PUT(self):
-        global SEQ
-        if not self.path.startswith("/u/"):
-            return self._reply(404, "not found")
+        if self.path.startswith("/u/"):
+            parts = self.path[3:].split("/", 1)
+            if len(parts) != 2:
+                return self._reply(400, "bad path")
+            token, name = safe(parts[0], "t"), safe(parts[1])
 
-        # Never trust the client's filename: basename it, then keep only safe
-        # characters. A traversal like ../../.ssh/authorized_keys would other-
-        # wise be a write primitive for anyone on the tailnet.
-        raw = os.path.basename(unquote(self.path[3:]))
-        name = re.sub(r"[^A-Za-z0-9._-]", "_", raw)[-72:].lstrip(".") or "image"
+            body, err = self._body(MAX_BYTES)
+            if err:
+                return self._reply(400 if err != "over 64 MB" else 413, err)
 
-        try:
-            length = int(self.headers.get("Content-Length", 0))
-        except ValueError:
-            return self._reply(400, "bad length")
-        if length <= 0:
-            return self._reply(400, "empty upload")
-        if length > MAX_BYTES:
-            return self._reply(413, f"over {MAX_BYTES // 1024 // 1024} MB")
+            d = batch_for(token)
+            with LOCK:
+                n = sum(1 for p in d.iterdir() if p.name != "note.md") + 1
+                path = d / f"{n}-{name}"
+                path.write_bytes(body)
+                with INDEX.open("a") as fh:
+                    fh.write(f"{d.name}\t{datetime.datetime.now().isoformat(timespec='seconds')}"
+                             f"\t{path.name}\t{len(body)}\n")
+            print(f"  [{d.name}] {path.name}  ({len(body) // 1024} KB)", flush=True)
+            return self._reply(200, f"{d.name} — {name}")
 
-        remaining, chunks = length, []
-        while remaining:
-            chunk = self.rfile.read(min(remaining, 1 << 16))
-            if not chunk:
-                return self._reply(400, "truncated upload")
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        body = b"".join(chunks)
+        if self.path.startswith("/note/"):
+            token = safe(self.path[6:], "t")
+            body, err = self._body(MAX_NOTE)
+            if err:
+                return self._reply(400, err)
+            # Note before photos is legal: this allocates the batch either way.
+            d = batch_for(token)
+            (d / "note.md").write_bytes(body)
+            print(f"  [{d.name}] note ({len(body)} bytes)", flush=True)
+            return self._reply(200, f"{d.name} note saved")
 
-        # The counter is the only shared mutable state and this is a threading
-        # server, so allocate the number and claim the file under one lock —
-        # two phones uploading at once must not land on the same sequence.
-        with SEQ_LOCK:
-            SEQ += 1
-            seq = SEQ
-            path = DEST / f"{seq:04d}-{name}"
-            path.write_bytes(body)
-
-            link = DEST / "latest"
-            tmp = DEST / ".latest.tmp"
-            tmp.unlink(missing_ok=True)
-            tmp.symlink_to(path.name)
-            tmp.replace(link)  # atomic: `latest` never briefly missing
-
-            with INDEX.open("a") as fh:
-                fh.write(f"{seq}\t{datetime.datetime.now().isoformat(timespec='seconds')}"
-                         f"\t{length}\t{raw}\t{path.name}\n")
-
-        print(f"  [{seq}] {path.name}  ({length // 1024} KB)", flush=True)
-        self._reply(200, f"{seq} — {name}")
+        self._reply(404, "not found")
 
     def log_message(self, *a):
-        pass  # the print above is the only output worth having
+        pass  # the prints above are the only output worth having
+
+
+def render(items):
+    if not items:
+        return '<div class="empty">nothing yet</div>'
+    out = []
+    for b in items:
+        shots = "".join(
+            f'<img loading="lazy" src="/f/{html.escape(b["batch"])}/{html.escape(f)}">'
+            for f in b["files"])
+        note = (f'<div class="bnote">{html.escape(b["note"])}</div>'
+                if b["note"] else "")
+        plural = "" if len(b["files"]) == 1 else "s"
+        out.append(
+            f'<div class="batch"><div class="bhead"><b>{html.escape(b["batch"])}</b>'
+            f'<span class="meta">{len(b["files"])} shot{plural} · {b["when"]}</span></div>'
+            f'{note}<div class="shots">{shots}</div></div>')
+    return "".join(out)
 
 
 def tailscale_ip():
@@ -258,7 +386,7 @@ def tailscale_ip():
 
 
 def main():
-    global DEST, INDEX, SEQ
+    global DEST, INDEX, BATCH
     ap = argparse.ArgumentParser(description="phone -> box photo drop")
     ap.add_argument("--port", type=int, default=8123)
     ap.add_argument("--dir", default="~/drop")
@@ -269,28 +397,24 @@ def main():
     DEST.mkdir(parents=True, exist_ok=True)
     INDEX = DEST / "index.tsv"
 
-    # Recover the counter from the files AND the append-only index, taking the
-    # higher. Files alone would reuse a number after you delete photos, so
-    # "look at drop 3" could later mean a different image than it did an hour
-    # ago; the index alone would lose to a file restored from backup.
-    seqs = [int(m.group(1)) for p in DEST.iterdir()
-            if (m := re.match(r"(\d{4,})-", p.name))]
+    # Recover the counter from the directories AND the append-only index, taking
+    # the higher. Directories alone would reuse a number after you delete a
+    # batch, so "look at drop 3" could later mean a different set of photos.
+    nums = [int(d.name) for d in DEST.iterdir()
+            if d.is_dir() and re.fullmatch(r"\d{4,}", d.name)]
     if INDEX.exists():
-        for line in INDEX.read_text().splitlines():
-            head = line.split("\t", 1)[0]
-            if head.isdigit():
-                seqs.append(int(head))
-    SEQ = max(seqs, default=0)
+        nums += [int(h) for line in INDEX.read_text().splitlines()
+                 if (h := line.split("\t", 1)[0]).isdigit()]
+    BATCH = max(nums, default=0)
 
-    # Deleting the newest photo leaves `latest` dangling, and a dangling symlink
+    # Deleting the newest batch leaves `latest` dangling, and a dangling symlink
     # is worse than a missing one — it reads as "there is a newest" right up to
     # the point something tries to open it. Repoint it at whatever survives.
     link = DEST / "latest"
     if link.is_symlink() and not link.exists():
-        newest = recent(limit=1)
         link.unlink()
-        if newest:
-            link.symlink_to(newest[0]["stored"])
+        if surviving := batches(limit=1):
+            link.symlink_to(surviving[0]["batch"])
 
     bind = args.bind or tailscale_ip()
     try:
@@ -299,7 +423,7 @@ def main():
         sys.exit(f"cannot bind {bind}:{args.port} — {e}")
 
     print(f"drop page:  http://{bind}:{args.port}")
-    print(f"saving to:  {DEST}  (next: {SEQ + 1:04d})")
+    print(f"saving to:  {DEST}  (next batch: {BATCH + 1:04d})")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
