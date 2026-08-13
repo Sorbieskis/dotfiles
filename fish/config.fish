@@ -58,3 +58,18 @@ function claudekimi
 end
 
 alias kimi="claudekimi"
+
+# gh as the work account (dsuchank), scoped to this one command.
+# `gh auth switch` would do it globally instead — and osnova-product's ./bin/ci
+# probes a repo the work account cannot see, so a left-over switch makes CI report
+# "API unreachable" rather than anything true. set -lx keeps it from leaking.
+function ghw
+    set -l tok (gh auth token --user dsuchank 2>/dev/null)
+    if test -z "$tok"
+        echo "Error: no gh token for dsuchank. Run: gh auth login"
+        return 1
+    end
+
+    set -lx GH_TOKEN $tok
+    gh $argv
+end
