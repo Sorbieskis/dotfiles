@@ -1,0 +1,20 @@
+[Unit]
+Description=photo-drop — phone-to-box image upload page on the tailnet
+# Wants, not Requires: tailscaled is a SYSTEM unit, so a user unit cannot order
+# itself after it reliably. The script falls back to 127.0.0.1 when the tailnet
+# is not up yet, and Restart=always re-binds once it is.
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/photo-drop
+# Without this, stdout to the journal is block-buffered, so `journalctl` shows
+# nothing until the buffer fills — which reads exactly like a hung service.
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=10
+# The box auto-reboots ~04:00 for unattended upgrades; this is what makes the
+# drop page survive it without anyone logging in (linger is enabled for dima).
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,310 @@
+#!/usr/bin/env python3
+"""Drop photos from the phone onto the box, for Claude Code to look at.
+
+A terminal SSH session (Termius on the phone) cannot accept an image, so this
+serves an upload page on the TAILSCALE IP — private to the tailnet, never
+public, same posture as Dockge.
+
+Every upload gets a monotonic sequence number, so ordering is a property of the
+NAME rather than of mtimes (which `cp -a`, rsync and a restore all preserve or
+mangle independently). Ask Claude for "drop 7" or "the newest".
+
+  ~/drop/0007-kitchen.jpg   stored file: <seq>-<original name>
+  ~/drop/latest             symlink -> the newest upload
+  ~/drop/index.tsv          append-only: seq, ISO time, bytes, original name
+
+Uploads are raw PUT bodies, not multipart form data: Python 3.13 removed the
+`cgi` module, which was the stdlib's only multipart parser. The page's JS reads
+the file and PUTs the bytes, so the server just writes the request body.
+
+Normally runs as a user service (photo-drop.service). Run by hand for a
+different port or directory:
+
+  photo-drop --port 9000 --dir ~/somewhere-else
+"""
+import argparse
+import datetime
+import html
+import http.server
+import json
+import mimetypes
+import os
+import pathlib
+import re
+import subprocess
+import sys
+import threading
+from urllib.parse import unquote
+
+DEST: pathlib.Path
+INDEX: pathlib.Path
+SEQ_LOCK = threading.Lock()
+SEQ = 0
+
+MAX_BYTES = 64 * 1024 * 1024
+SHOWN = 12  # recent uploads rendered on the page
+
+PAGE = """<!doctype html>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>drop</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:1.5rem 1rem 3rem; background:#12171c; color:#e6edf3;
+         font:16px/1.5 system-ui,-apple-system,sans-serif; }
+  header { display:flex; align-items:baseline; justify-content:space-between;
+           margin-bottom:1.25rem; }
+  h1 { font-size:1rem; margin:0; color:#7fd3e0; letter-spacing:.04em;
+       text-transform:uppercase; font-weight:600; }
+  .count { font:12px ui-monospace,monospace; color:#8b98a5; }
+  label.drop { display:block; padding:2rem 1rem; text-align:center; cursor:pointer;
+         border:1px dashed #3a4753; background:#161c22;
+         font-weight:500; letter-spacing:.01em; }
+  label.drop:active { background:#1b232b; border-color:#7fd3e0; }
+  label.drop span { color:#7fd3e0; }
+  input[type=file] { display:none; }
+  #log { margin:1rem 0 0; font:13px/1.8 ui-monospace,monospace; }
+  .ok { color:#7fc7a3; } .err { color:#e5806b; } .pend { color:#8b98a5; }
+  h2 { font-size:.75rem; text-transform:uppercase; letter-spacing:.08em;
+       color:#8b98a5; font-weight:600; margin:2rem 0 .75rem;
+       border-top:1px solid #232c35; padding-top:1rem; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr));
+          gap:.6rem; }
+  figure { margin:0; background:#161c22; border:1px solid #232c35; }
+  figure img { width:100%; aspect-ratio:1; object-fit:cover; display:block; }
+  figcaption { padding:.4rem .5rem; font:11px/1.4 ui-monospace,monospace;
+               color:#8b98a5; display:flex; justify-content:space-between; gap:.5rem; }
+  figcaption b { color:#7fd3e0; font-weight:600; }
+  figcaption span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .empty { color:#5c6875; font:13px ui-monospace,monospace; }
+</style>
+<header>
+  <h1>drop</h1>
+  <div class="count">__DEST__</div>
+</header>
+<label class="drop">
+  <input type="file" accept="image/*" multiple onchange="send(this.files)">
+  tap to pick <span>photos</span>
+</label>
+<div id="log"></div>
+<h2>recent</h2>
+<div class="grid" id="grid">__RECENT__</div>
+<script>
+const log = document.getElementById('log');
+async function send(files) {
+  let ok = 0;
+  for (const f of files) {
+    const line = document.createElement('div');
+    line.className = 'pend';
+    line.textContent = '\\u00b7\\u00b7\\u00b7 ' + f.name;
+    log.prepend(line);
+    try {
+      const r = await fetch('/u/' + encodeURIComponent(f.name),
+                            { method: 'PUT', body: f });
+      const t = (await r.text()).trim();
+      line.className = r.ok ? 'ok' : 'err';
+      line.textContent = (r.ok ? '\\u2713 ' : '\\u2717 ') + t;
+      if (r.ok) ok++;
+    } catch (e) {
+      line.className = 'err';
+      line.textContent = '\\u2717 ' + f.name + ' \\u2014 ' + e;
+    }
+  }
+  if (ok) refresh();
+}
+async function refresh() {
+  try {
+    const r = await fetch('/api/list');
+    const items = await r.json();
+    document.getElementById('grid').innerHTML = items.map(i =>
+      '<figure><img loading="lazy" src="/f/' + encodeURIComponent(i.stored) + '">' +
+      '<figcaption><b>' + i.seq + '</b><span>' + i.kb + ' KB</span></figcaption></figure>'
+    ).join('') || '<div class="empty">nothing yet</div>';
+  } catch (e) { /* page still works without the refresh */ }
+}
+</script>
+"""
+
+
+def recent(limit=SHOWN):
+    """Newest-first view of the drop dir, read off the filenames.
+
+    Deliberately NOT read from index.tsv: the files on disk are the truth, so a
+    deleted photo disappears from the page instead of 404-ing a dead thumbnail.
+    """
+    out = []
+    for p in DEST.iterdir():
+        m = re.match(r"(\d{4,})-(.*)", p.name)
+        if m and p.is_file() and not p.is_symlink():
+            out.append({"seq": int(m.group(1)), "stored": p.name,
+                        "name": m.group(2), "kb": p.stat().st_size // 1024})
+    out.sort(key=lambda i: i["seq"], reverse=True)
+    return out[:limit]
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    server_version = "photo-drop"
+
+    def _reply(self, code, body, ctype="text/plain; charset=utf-8"):
+        raw = body if isinstance(body, bytes) else body.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        try:
+            self.wfile.write(raw)
+        except BrokenPipeError:
+            pass  # phone navigated away mid-thumbnail; not worth a traceback
+
+    def do_GET(self):
+        if self.path == "/":
+            items = recent()
+            cards = "".join(
+                f'<figure><img loading="lazy" src="/f/{html.escape(i["stored"])}">'
+                f'<figcaption><b>{i["seq"]}</b><span>{i["kb"]} KB</span></figcaption></figure>'
+                for i in items
+            ) or '<div class="empty">nothing yet</div>'
+            # Plain .replace(), NOT %-formatting or .format(): the template is
+            # CSS + JS, so it is full of `width:100%` and `{ }` that both of
+            # those would try to interpret. (It did — `%;` raised ValueError on
+            # every page render while uploads kept working, since PUT never
+            # touches this path.)
+            page = (PAGE
+                    .replace("__DEST__", html.escape(
+                        str(DEST).replace(str(pathlib.Path.home()), "~")))
+                    .replace("__RECENT__", cards))
+            return self._reply(200, page, "text/html; charset=utf-8")
+
+        if self.path == "/api/list":
+            return self._reply(200, json.dumps(recent()), "application/json")
+
+        if self.path.startswith("/f/"):
+            name = os.path.basename(unquote(self.path[3:]))
+            path = DEST / name
+            # resolve() before the parent check: a symlink pointing outside the
+            # drop dir would otherwise serve arbitrary files to the tailnet.
+            if not path.is_file() or path.resolve().parent != DEST.resolve():
+                return self._reply(404, "not found")
+            ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
+            return self._reply(200, path.read_bytes(), ctype)
+
+        self._reply(404, "not found")
+
+    def do_PUT(self):
+        global SEQ
+        if not self.path.startswith("/u/"):
+            return self._reply(404, "not found")
+
+        # Never trust the client's filename: basename it, then keep only safe
+        # characters. A traversal like ../../.ssh/authorized_keys would other-
+        # wise be a write primitive for anyone on the tailnet.
+        raw = os.path.basename(unquote(self.path[3:]))
+        name = re.sub(r"[^A-Za-z0-9._-]", "_", raw)[-72:].lstrip(".") or "image"
+
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            return self._reply(400, "bad length")
+        if length <= 0:
+            return self._reply(400, "empty upload")
+        if length > MAX_BYTES:
+            return self._reply(413, f"over {MAX_BYTES // 1024 // 1024} MB")
+
+        remaining, chunks = length, []
+        while remaining:
+            chunk = self.rfile.read(min(remaining, 1 << 16))
+            if not chunk:
+                return self._reply(400, "truncated upload")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        body = b"".join(chunks)
+
+        # The counter is the only shared mutable state and this is a threading
+        # server, so allocate the number and claim the file under one lock —
+        # two phones uploading at once must not land on the same sequence.
+        with SEQ_LOCK:
+            SEQ += 1
+            seq = SEQ
+            path = DEST / f"{seq:04d}-{name}"
+            path.write_bytes(body)
+
+            link = DEST / "latest"
+            tmp = DEST / ".latest.tmp"
+            tmp.unlink(missing_ok=True)
+            tmp.symlink_to(path.name)
+            tmp.replace(link)  # atomic: `latest` never briefly missing
+
+            with INDEX.open("a") as fh:
+                fh.write(f"{seq}\t{datetime.datetime.now().isoformat(timespec='seconds')}"
+                         f"\t{length}\t{raw}\t{path.name}\n")
+
+        print(f"  [{seq}] {path.name}  ({length // 1024} KB)", flush=True)
+        self._reply(200, f"{seq} — {name}")
+
+    def log_message(self, *a):
+        pass  # the print above is the only output worth having
+
+
+def tailscale_ip():
+    try:
+        out = subprocess.run(["tailscale", "ip", "-4"],
+                             capture_output=True, text=True, timeout=5)
+        ip = out.stdout.strip().split("\n")[0]
+        if ip:
+            return ip
+    except Exception:
+        pass
+    return "127.0.0.1"
+
+
+def main():
+    global DEST, INDEX, SEQ
+    ap = argparse.ArgumentParser(description="phone -> box photo drop")
+    ap.add_argument("--port", type=int, default=8123)
+    ap.add_argument("--dir", default="~/drop")
+    ap.add_argument("--bind", default=None, help="default: the Tailscale IP")
+    args = ap.parse_args()
+
+    DEST = pathlib.Path(args.dir).expanduser().resolve()
+    DEST.mkdir(parents=True, exist_ok=True)
+    INDEX = DEST / "index.tsv"
+
+    # Recover the counter from the files AND the append-only index, taking the
+    # higher. Files alone would reuse a number after you delete photos, so
+    # "look at drop 3" could later mean a different image than it did an hour
+    # ago; the index alone would lose to a file restored from backup.
+    seqs = [int(m.group(1)) for p in DEST.iterdir()
+            if (m := re.match(r"(\d{4,})-", p.name))]
+    if INDEX.exists():
+        for line in INDEX.read_text().splitlines():
+            head = line.split("\t", 1)[0]
+            if head.isdigit():
+                seqs.append(int(head))
+    SEQ = max(seqs, default=0)
+
+    # Deleting the newest photo leaves `latest` dangling, and a dangling symlink
+    # is worse than a missing one — it reads as "there is a newest" right up to
+    # the point something tries to open it. Repoint it at whatever survives.
+    link = DEST / "latest"
+    if link.is_symlink() and not link.exists():
+        newest = recent(limit=1)
+        link.unlink()
+        if newest:
+            link.symlink_to(newest[0]["stored"])
+
+    bind = args.bind or tailscale_ip()
+    try:
+        srv = http.server.ThreadingHTTPServer((bind, args.port), Handler)
+    except OSError as e:
+        sys.exit(f"cannot bind {bind}:{args.port} — {e}")
+
+    print(f"drop page:  http://{bind}:{args.port}")
+    print(f"saving to:  {DEST}  (next: {SEQ + 1:04d})")
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        print("\nstopped.")
+
+
+if __name__ == "__main__":
+    main()
