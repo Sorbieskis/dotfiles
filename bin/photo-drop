@@ -57,6 +57,10 @@ TOKEN_CAP = 64
 MAX_BYTES = 64 * 1024 * 1024
 MAX_NOTE = 8000
 SHOWN = 8  # batches rendered on the page
+# Raster types served inline; everything else (svg, html, …) → octet-stream.
+IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp",
+               "image/bmp", "image/tiff", "image/heic", "image/heif",
+               "image/avif"}
 
 PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -258,6 +262,15 @@ def batch_for(token):
         BATCH += 1
         d = DEST / f"{BATCH:04d}"
         d.mkdir(exist_ok=True)
+        # Record the number the instant it is minted, not on first upload. The
+        # index is the durable memory the boot-time counter recovers from, and a
+        # batch can exist with a note but zero photos (or a PUT can error after
+        # this point) — those never reach the /u/ index append. Without this
+        # line, deleting such a batch and restarting hands its number out again,
+        # so "batch N" would name a different set of photos. (Reviewer #1.)
+        with INDEX.open("a") as fh:
+            fh.write(f"{d.name}\t{datetime.datetime.now().isoformat(timespec='seconds')}"
+                     f"\talloc\t0\n")
         TOKENS[token] = d
         if len(TOKENS) > TOKEN_CAP:
             for k in list(TOKENS)[:-TOKEN_CAP]:
@@ -272,12 +285,22 @@ def batch_for(token):
 
 class Handler(http.server.BaseHTTPRequestHandler):
     server_version = "photo-drop"
+    # Socket timeout (honored by StreamRequestHandler): a client that promises N
+    # bytes in Content-Length, sends fewer, and never closes would otherwise
+    # block this worker thread forever in rfile.read(). This is not just an
+    # attacker case — a phone that loses signal mid-upload sends the header then
+    # goes silent, no FIN. Without this, that worker hangs (holding up to 64 MB)
+    # until TCP eventually gives up, minutes later, on a RAM-tight box.
+    timeout = 30
 
     def _reply(self, code, body, ctype="text/plain; charset=utf-8"):
         raw = body if isinstance(body, bytes) else body.encode()
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(raw)))
+        # Stored bytes are the raw upload — never let a browser sniff a
+        # .html/.svg upload into an executable type on this origin (see /f/).
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         try:
             self.wfile.write(raw)
@@ -285,21 +308,31 @@ class Handler(http.server.BaseHTTPRequestHandler):
             pass  # phone navigated away mid-thumbnail; not worth a traceback
 
     def _body(self, cap):
+        """Read the request body. Returns (bytes, None) or (None, (code, msg)).
+
+        A structured error, NOT a human string the caller string-matches on:
+        the old `err != "over 64 MB"` compare silently downgraded a 413 to 400
+        the moment the size limit was anything but exactly 64 MB.
+        """
         try:
             length = int(self.headers.get("Content-Length", 0))
         except ValueError:
-            return None, "bad length"
+            return None, (400, "bad length")
         if length <= 0:
-            return None, "empty"
+            return None, (400, "empty")
         if length > cap:
-            return None, f"over {cap // 1024 // 1024} MB"
+            return None, (413, "too large")
         remaining, chunks = length, []
-        while remaining:
-            chunk = self.rfile.read(min(remaining, 1 << 16))
-            if not chunk:
-                return None, "truncated upload"
-            chunks.append(chunk)
-            remaining -= len(chunk)
+        try:
+            while remaining:
+                chunk = self.rfile.read(min(remaining, 1 << 16))
+                if not chunk:
+                    return None, (400, "truncated upload")
+                chunks.append(chunk)
+                remaining -= len(chunk)
+        except OSError:
+            # socket timeout (see Handler.timeout) or a reset mid-body.
+            return None, (408, "upload timed out")
         return b"".join(chunks), None
 
     def do_GET(self):
@@ -327,7 +360,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # drop dir would otherwise serve arbitrary files to the tailnet.
             if not path.is_file() or not path.resolve().is_relative_to(DEST.resolve()):
                 return self._reply(404, "not found")
-            ctype = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+            # Allowlist of RASTER image types only. The stored bytes are the raw
+            # upload, so an uploaded .html or .svg would otherwise be served with
+            # an executable content-type on this origin; svg counts as image/* so
+            # a startswith("image/") test would pass it. Anything not on the list
+            # falls back to octet-stream (an inert download), and nosniff (in
+            # _reply) stops the browser second-guessing that. (Reviewer #4.)
+            guessed = mimetypes.guess_type(path.name)[0]
+            ctype = guessed if guessed in IMAGE_TYPES else "application/octet-stream"
             return self._reply(200, path.read_bytes(), ctype)
 
         self._reply(404, "not found")
@@ -341,10 +381,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
             body, err = self._body(MAX_BYTES)
             if err:
-                return self._reply(400 if err != "over 64 MB" else 413, err)
+                return self._reply(*err)
 
             d = batch_for(token)
             with LOCK:
+                # Re-check under the lock: a DELETE could have rmtree'd this
+                # batch in the window after batch_for released the lock. delete
+                # also holds LOCK, so once we hold it the dir cannot vanish
+                # mid-iterdir — the guard turns a would-be 500 into a clean 409.
+                if not d.is_dir():
+                    return self._reply(409, "batch was deleted")
                 n = sum(1 for p in d.iterdir() if p.name != "note.md") + 1
                 path = d / f"{n}-{name}"
                 path.write_bytes(body)
@@ -358,10 +404,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             token = safe(self.path[6:], "t")
             body, err = self._body(MAX_NOTE)
             if err:
-                return self._reply(400, err)
+                return self._reply(*err)
             # Note before photos is legal: this allocates the batch either way.
             d = batch_for(token)
-            (d / "note.md").write_bytes(body)
+            with LOCK:
+                # Same race guard as /u/: a concurrent DELETE could have removed
+                # the dir; write_bytes into a missing parent would 500. Under the
+                # lock the dir is stable. (Reviewer #5.)
+                if not d.is_dir():
+                    return self._reply(409, "batch was deleted")
+                (d / "note.md").write_bytes(body)
             print(f"  [{d.name}] note ({len(body)} bytes)", flush=True)
             return self._reply(200, f"{d.name} note saved")
 
