@@ -39,6 +39,7 @@ import mimetypes
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -95,6 +96,9 @@ PAGE = """<!doctype html>
   .bhead { display:flex; align-items:baseline; gap:.5rem; margin-bottom:.4rem; }
   .bhead b { color:#7fd3e0; font:600 13px ui-monospace,monospace; }
   .bhead .meta { font:11px ui-monospace,monospace; color:#5c6875; }
+  .del { margin-left:auto; flex:0 0 auto; background:none; border:0;
+         color:#5c6875; font:16px/1 system-ui; cursor:pointer; padding:.1rem .4rem; }
+  .del:active { color:#e5806b; }
   .bnote { font-size:14px; color:#c9d4de; margin:.1rem 0 .5rem;
            border-left:2px solid #3a4753; padding-left:.6rem; white-space:pre-wrap; }
   .shots { display:grid; grid-template-columns:repeat(auto-fill,minmax(96px,1fr));
@@ -185,13 +189,25 @@ async function refresh() {
     document.getElementById('grid').innerHTML = b.map(x =>
       '<div class="batch"><div class="bhead"><b>' + x.batch + '</b>' +
       '<span class="meta">' + x.files.length + ' shot' +
-      (x.files.length === 1 ? '' : 's') + ' \\u00b7 ' + x.when + '</span></div>' +
+      (x.files.length === 1 ? '' : 's') + ' \\u00b7 ' + x.when + '</span>' +
+      '<button class="del" data-b="' + x.batch + '" onclick="delBatch(this)">\\u2715</button>' +
+      '</div>' +
       (x.note ? '<div class="bnote">' + esc(x.note) + '</div>' : '') +
       '<div class="shots">' + x.files.map(f =>
         '<img loading="lazy" src="/f/' + x.batch + '/' + encodeURIComponent(f) + '">'
       ).join('') + '</div></div>'
     ).join('') || '<div class="empty">nothing yet</div>';
   } catch (e) { /* page still works without the refresh */ }
+}
+async function delBatch(el) {
+  // data-b + this, not an inline quoted arg: keeps the batch id out of the
+  // onclick string entirely, so no quote-escaping to get wrong.
+  const n = el.dataset.b;
+  if (!confirm('Delete batch ' + n + '? This cannot be undone.')) return;
+  try {
+    const r = await fetch('/b/' + n, { method: 'DELETE' });
+    if (r.ok) refresh(); else alert('delete failed: ' + (await r.text()));
+  } catch (e) { alert('delete failed: ' + e); }
 }
 function esc(s) {
   return s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
@@ -351,8 +367,57 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         self._reply(404, "not found")
 
+    def do_DELETE(self):
+        if self.path.startswith("/b/"):
+            ok, msg = delete_batch(safe(self.path[3:], ""))
+            return self._reply(200 if ok else 404, msg)
+        self._reply(404, "not found")
+
     def log_message(self, *a):
         pass  # the prints above are the only output worth having
+
+
+def heal_latest():
+    """Point `latest` at the newest surviving batch, or drop it if none remain.
+
+    A dangling symlink is worse than a missing one — it reads as 'there is a
+    newest' until something opens it. `link.exists()` follows the symlink, so it
+    is False exactly when `latest` is dangling or absent; a still-valid `latest`
+    (an older batch was deleted, not the newest) is left untouched.
+    """
+    link = DEST / "latest"
+    if link.exists():
+        return
+    link.unlink(missing_ok=True)
+    if surviving := batches(limit=1):
+        link.symlink_to(surviving[0]["batch"])
+
+
+def delete_batch(name):
+    """Delete a whole batch directory. Returns (ok, message).
+
+    Batch-level, not shot-level: the batch is the unit everywhere else — one
+    pick, one number, one note — so it is the unit you clear too. The number is
+    NOT reclaimed: index.tsv is append-only, so `main()` recovers the counter
+    past it and a deleted batch's number is never handed out again. That is what
+    keeps 'batch 7' meaning one thing for the life of the drop dir.
+    """
+    if not re.fullmatch(r"\d{4,}", name):
+        return False, "bad batch"
+    d = DEST / name
+    # resolve() inside DEST: a crafted name must not rmtree outside the drop dir.
+    if not d.is_dir() or not d.resolve().is_relative_to(DEST.resolve()):
+        return False, "not found"
+    with LOCK:
+        shutil.rmtree(d)
+        # Forget any client tokens that pointed here, or a trailing note PUT
+        # would silently recreate the directory we just deleted.
+        for k, v in list(TOKENS.items()):
+            if v == d:
+                TOKENS.pop(k, None)
+        heal_latest()
+    print(f"  [{name}] deleted", flush=True)
+    return True, f"{name} deleted"
 
 
 def render(items):
@@ -368,7 +433,9 @@ def render(items):
         plural = "" if len(b["files"]) == 1 else "s"
         out.append(
             f'<div class="batch"><div class="bhead"><b>{html.escape(b["batch"])}</b>'
-            f'<span class="meta">{len(b["files"])} shot{plural} · {b["when"]}</span></div>'
+            f'<span class="meta">{len(b["files"])} shot{plural} · {b["when"]}</span>'
+            f'<button class="del" data-b="{html.escape(b["batch"])}" '
+            f'onclick="delBatch(this)">✕</button></div>'
             f'{note}<div class="shots">{shots}</div></div>')
     return "".join(out)
 
@@ -407,14 +474,9 @@ def main():
                  if (h := line.split("\t", 1)[0]).isdigit()]
     BATCH = max(nums, default=0)
 
-    # Deleting the newest batch leaves `latest` dangling, and a dangling symlink
-    # is worse than a missing one — it reads as "there is a newest" right up to
-    # the point something tries to open it. Repoint it at whatever survives.
-    link = DEST / "latest"
-    if link.is_symlink() and not link.exists():
-        link.unlink()
-        if surviving := batches(limit=1):
-            link.symlink_to(surviving[0]["batch"])
+    # A batch deleted while the service was down (or the newest one deleted)
+    # leaves `latest` dangling; fix it at boot. Same routine the delete path uses.
+    heal_latest()
 
     bind = args.bind or tailscale_ip()
     try:
