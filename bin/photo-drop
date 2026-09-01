@@ -43,6 +43,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from urllib.parse import unquote
 
 DEST: pathlib.Path
@@ -492,16 +493,29 @@ def render(items):
     return "".join(out)
 
 
-def tailscale_ip():
-    try:
-        out = subprocess.run(["tailscale", "ip", "-4"],
-                             capture_output=True, text=True, timeout=5)
-        ip = out.stdout.strip().split("\n")[0]
-        if ip:
-            return ip
-    except Exception:
-        pass
-    return "127.0.0.1"
+def tailscale_ip(wait=0):
+    """The tailnet address, or None. Polls for up to `wait` seconds.
+
+    TRAP: no address here must NOT fall back to 127.0.0.1. At boot this loses a
+    race — tailscaled is a SYSTEM unit and this is a USER unit, so the unit
+    cannot order itself after it — and a loopback bind is then permanent: the
+    server does not exit, so `Restart=always` never fires and the page is dead
+    on the tailnet until someone restarts it by hand. Returning None lets the
+    caller exit non-zero, which is the only thing systemd will retry.
+    """
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            out = subprocess.run(["tailscale", "ip", "-4"],
+                                 capture_output=True, text=True, timeout=5)
+            ip = out.stdout.strip().split("\n")[0]
+            if ip:
+                return ip
+        except Exception:
+            pass
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(2)
 
 
 def main():
@@ -530,7 +544,12 @@ def main():
     # leaves `latest` dangling; fix it at boot. Same routine the delete path uses.
     heal_latest()
 
-    bind = args.bind or tailscale_ip()
+    bind = args.bind
+    if bind is None:
+        bind = tailscale_ip(wait=60)
+        if bind is None:
+            sys.exit("no Tailscale IP after 60s — exiting so systemd retries. "
+                     "Serve loopback deliberately with --bind 127.0.0.1.")
     try:
         srv = http.server.ThreadingHTTPServer((bind, args.port), Handler)
     except OSError as e:
