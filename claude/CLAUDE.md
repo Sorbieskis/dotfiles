@@ -39,7 +39,7 @@ services people use.
 - sudo is passwordless. Docker available. Python via `uv`; node from apt.
 - RAM is tight (8 GB shared with the stack): earlyoom kills build tools first
   under pressure. **While Minecraft is stopped (see above, 2026-07-24) there is
-  ~4.8 GB available** instead of ~2.3 GB, so a single cargo build or a language
+  ~4.8 GB available** instead of ~2.3 GB — ⚠ **measured 1.3 GB on 2026-09-02** with 4 GB in swap: `osnova-product-staging`, `dsh-play`, `pocket-id` and the livesync pair have joined since — so a single cargo build or a language
   server is comfortable — still avoid *parallel* builds. If Minecraft is
   restarted, the JVM takes ~2.4 GB resident (heap cap 5 GB, no container memory
   limit) and the old "avoid anything heavy" rule applies again. Check with
