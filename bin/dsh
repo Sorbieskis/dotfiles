@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# dsh — the DeepSeek Harness TUI, usable on ANY project on this box.
+#
+# ⚠ WHY A LAUNCHER AND NOT A SECOND INSTALL. Everything needed already exists in the lane:
+# the node runtime, the ~6 GB package tree, the `tui` profile and — the part that cannot be
+# duplicated cheaply — the OAuth grant in `$DSH_HOME/.credentials.yaml`, which is keyed by
+# PROVIDER, not by project. One grant already covers luna/sol/terra. A second install would
+# duplicate all of it to change two settings.
+#
+# ⚠ THE TWO SETTINGS, because they are the whole reason this file exists. osnova-product's
+# `bin/lane install` builds the `tui` profile and hardwires that project into it:
+#
+#   1. The hooks bridge carries `configPath: <osnova>/.claude/settings.json` and
+#      `projectDir: <osnova>`. Open the profile in another repo and SessionStart pulls the
+#      OSNOVA vault and prints the OSNOVA board, and the Stop hook nags that osnova is
+#      unpushed. That is not cosmetic — it is a session banner telling you about the wrong
+#      project, and `configPath` is process-level and parsed once at load, so a profile
+#      cannot carry two.
+#   2. The route lives in the HOME-level patch (`$DSH_HOME/cordis.patch.yml`), which
+#      `bin/lane dispatch` REWRITES on every single run. Your default model therefore flips
+#      under you whenever a lane build happens to run.
+#
+# This boots the same profile with one `--patch` overlay that disables the bridge and pins
+# the route for THIS process only. It writes no shared state, so a `bin/lane dispatch`
+# running concurrently is unaffected in both directions.
+#
+# ⚠ SKILLS NEED NO OVERLAY AND MUST NOT GET ONE. `dsh-skill-filesystem` mounts
+# `<projectRoot>/.dsh/skills`, where projectRoot is the nearest `.git` ancestor of the cwd —
+# so each project already gets its own briefs, or none. Pointing it anywhere would hand one
+# project's briefs to another, which is the failure the osnova profile comment already warns
+# about for `.claude/skills`.
+set -euo pipefail
+
+LANE="${LANE_ROOT:-$HOME/dsh-play/lane}"
+DSH_BIN="$LANE/dsh/node_modules/.bin/dsh"
+LANE_REPO="${LANE_REPO:-$HOME/dev/osnova-product}"
+DEFAULT_ROUTE=luna
+
+usage() {
+  cat <<EOF
+usage: dsh [route] [-- dsh args...]
+
+  route    luna (default) · sol · terra · v4 · v4-pro, or a bare deepseek-* model id.
+           Resolved through osnova-product's \`bin/lane resolve-route\` when that checkout
+           has it, so the route words cannot drift from the lane's own list.
+
+  Runs in the CURRENT directory: the TUI's sandbox is workspace-write rooted at the cwd and
+  its approval policy is "ask". Set DSH_PERMISSION_MODE=danger-full-access to lift both —
+  the TUI reads it directly, and on this box that means the model can reach every project
+  and ~/vault, so do it deliberately.
+
+  Switch model in-session with /model. This launcher only sets what you START on.
+EOF
+}
+
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+esac
+
+route="${1:-$DEFAULT_ROUTE}"
+[ $# -gt 0 ] && shift || true
+[ "${1:-}" = "--" ] && shift || true
+
+[ -x "$DSH_BIN" ] || { echo "dsh: no lane install at $LANE — run osnova-product's \`./bin/lane install\`" >&2; exit 2; }
+
+# ⚠ ASK THE LANE, DO NOT KEEP A SECOND LIST. `bin/lane resolve-route <name>` answers the
+# canonical route plus its provider and model as JSON — the same interface `bin/seat`'s
+# same-seat refusal uses, and it exists precisely because two route lists that can disagree
+# is a bug this project has already paid for. The fallback below is for a checkout that
+# predates that subcommand; it is deliberately minimal and the lane stays the source.
+resolved=$("$LANE_REPO/bin/lane" resolve-route "$route" 2>/dev/null || true)
+if [ -n "$resolved" ]; then
+  provider=$(printf '%s' "$resolved" | python3 -c 'import json,sys; print(json.load(sys.stdin)["provider"])')
+  model=$(printf '%s' "$resolved" | python3 -c 'import json,sys; print(json.load(sys.stdin)["model"])')
+else
+  case "$route" in
+    luna)  provider=openai-codex; model=gpt-5.6-luna ;;
+    sol)   provider=openai-codex; model=gpt-5.6-sol ;;
+    terra) provider=openai-codex; model=gpt-5.6-terra ;;
+    v4|deepseek)         provider=deepseek-official; model=deepseek-v4-flash-vision-exp ;;
+    v4-pro|deepseek-pro) provider=deepseek-official; model=deepseek-v4-pro ;;
+    deepseek-*)          provider=deepseek-official; model="$route" ;;
+    *) echo "dsh: unknown route '$route' (and $LANE_REPO/bin/lane could not resolve it)" >&2
+       usage >&2; exit 2 ;;
+  esac
+fi
+
+overlay=$(mktemp -t dsh-overlay-XXXXXX.yml)
+trap 'rm -f "$overlay"' EXIT
+{
+  echo "# Written per-invocation by ~/.dotfiles/bin/dsh. Not shared; deleted on exit."
+  # The bridge row is INSERTED by the profile patch, so disabling it by id is what removes
+  # it; deleting the row is not something an overlay can do.
+  echo "- id: hooks-claude-code"
+  echo "  disabled: true"
+  echo "- id: agent-default-model"
+  echo "  config:"
+  echo "    provider: $provider"
+  echo "    model: $model"
+  # A grant route must also be DECLARED, not merely selected: dsh answers a provider that no
+  # `llm-pi-ai.providers` entry declares with `NO_ADAPTER`, which reads exactly like a typo'd
+  # model id. Same two-entry shape `bin/lane`'s write_model_patch uses.
+  if [ "$provider" = "openai-codex" ]; then
+    echo "- id: llm-pi-ai"
+    echo "  config:"
+    echo "    providers:"
+    echo "      $provider: {}"
+  fi
+} > "$overlay"
+
+export DSH_HOME="$LANE/dsh-home"
+export PATH="$LANE/node/bin:$PATH"
+exec "$DSH_BIN" --profile tui --patch "$overlay" "$@"
