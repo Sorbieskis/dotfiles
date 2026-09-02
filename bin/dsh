@@ -15,14 +15,18 @@
 #      OSNOVA vault and prints the OSNOVA board, and the Stop hook nags that osnova is
 #      unpushed. That is not cosmetic — it is a session banner telling you about the wrong
 #      project, and `configPath` is process-level and parsed once at load, so a profile
-#      cannot carry two.
+#      cannot carry two. So the bridge stays ON only when the cwd's git root IS that
+#      `projectDir` — there it is exactly what `claude` does in the same directory (the
+#      SessionStart banner, the Stop nudge) — and is disabled by overlay everywhere else.
+#      The comparison is on `realpath`s read from the profile patch itself, not on a path
+#      this file remembers: the patch is what the bridge parses, so it cannot drift from it.
 #   2. The route lives in the HOME-level patch (`$DSH_HOME/cordis.patch.yml`), which
 #      `bin/lane dispatch` REWRITES on every single run. Your default model therefore flips
 #      under you whenever a lane build happens to run.
 #
-# This boots the same profile with one `--patch` overlay that disables the bridge and pins
-# the route for THIS process only. It writes no shared state, so a `bin/lane dispatch`
-# running concurrently is unaffected in both directions.
+# This boots the same profile with one `--patch` overlay that pins the route (and, outside
+# the wired project, disables the bridge) for THIS process only. It writes no shared state,
+# so a `bin/lane dispatch` running concurrently is unaffected in both directions.
 #
 # ⚠ SKILLS NEED NO OVERLAY AND MUST NOT GET ONE. `dsh-skill-filesystem` mounts
 # `<projectRoot>/.dsh/skills`, where projectRoot is the nearest `.git` ancestor of the cwd —
@@ -50,6 +54,10 @@ usage: dsh [route] [-- dsh args...]
   and ~/vault, so do it deliberately.
 
   Switch model in-session with /model. This launcher only sets what you START on.
+
+  In the project the profile's Claude-hooks bridge is wired to (its \`projectDir\`), the
+  project's .claude hooks run — the same SessionStart banner and Stop nudge \`claude\`
+  gives there. In any other directory the bridge is off.
 EOF
 }
 
@@ -57,6 +65,9 @@ case "${1:-}" in
   -h|--help) usage; exit 0 ;;
 esac
 
+# A leading `--` means "default route, dsh args follow" — without this it would be read as
+# the route word.
+[ "${1:-}" = "--" ] && set -- "$DEFAULT_ROUTE" "$@"
 route="${1:-$DEFAULT_ROUTE}"
 [ $# -gt 0 ] && shift || true
 [ "${1:-}" = "--" ] && shift || true
@@ -85,14 +96,28 @@ else
   esac
 fi
 
+# The bridge is wired to ONE project (header, point 1). Keep it only when the cwd's git root
+# is that project; `realpath` both sides so a symlinked path to the same checkout matches.
+PROFILE_PATCH="$LANE/dsh-home/profiles/tui/cordis.patch.yml"
+bridge_dir=$(sed -n 's/^[[:space:]]*projectDir:[[:space:]]*//p' "$PROFILE_PATCH" 2>/dev/null | head -1)
+bridge_dir="${bridge_dir%"${bridge_dir##*[![:space:]]}"}"   # trailing whitespace would fail CLOSED (bridge off in its own project)
+git_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+bridge=off
+if [ -n "$bridge_dir" ] && [ -n "$git_root" ] \
+   && [ "$(realpath "$git_root")" = "$(realpath "$bridge_dir" 2>/dev/null)" ]; then
+  bridge=on
+fi
+
 overlay=$(mktemp -t dsh-overlay-XXXXXX.yml)
 trap 'rm -f "$overlay"' EXIT
 {
   echo "# Written per-invocation by ~/.dotfiles/bin/dsh. Not shared; deleted on exit."
   # The bridge row is INSERTED by the profile patch, so disabling it by id is what removes
   # it; deleting the row is not something an overlay can do.
-  echo "- id: hooks-claude-code"
-  echo "  disabled: true"
+  if [ "$bridge" = off ]; then
+    echo "- id: hooks-claude-code"
+    echo "  disabled: true"
+  fi
   echo "- id: agent-default-model"
   echo "  config:"
   echo "    provider: $provider"
