@@ -1,8 +1,10 @@
 [Unit]
 Description=photo-drop — phone-to-box image upload page on the tailnet
-# Wants, not Requires: tailscaled is a SYSTEM unit, so a user unit cannot order
-# itself after it reliably. The script falls back to 127.0.0.1 when the tailnet
-# is not up yet, and Restart=always re-binds once it is.
+# tailscaled is a SYSTEM unit, so this user unit cannot order itself after it.
+# The script therefore POLLS for the tailnet address for 60s and exits non-zero
+# if it never appears, which Restart=always then retries. It must never fall
+# back to 127.0.0.1: a wrongly-bound server does not exit, so nothing restarts
+# it (2026-09-01 — the page was dead on the tailnet for a day after a reboot).
 After=network-online.target
 
 [Service]

@@ -4,6 +4,11 @@ Hetzner CPX32 (4 vCPU / 8 GB) running BOTH live production services and dima's
 personal dev environment. Unlike a disposable devbox, mistakes here take down
 services people use.
 
+**A move to a netcup root server is planned (prep done 2026-09-04, box not ordered yet).**
+Runbook: `~/dev/osnova-infra/MIGRATION.md`; data mover: `scripts/migrate-pull.sh` there.
+Until the cutover nothing about this box changes — the Tailscale IP below is meant to be
+pinned onto the new node so these notes stay true.
+
 ## Production on this box (Docker — do not disturb casually)
 
 - Caddy (:80/:443), Outline wiki (wiki.osnovasystems.com), Forgejo

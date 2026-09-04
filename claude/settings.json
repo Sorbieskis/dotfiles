@@ -47,13 +47,23 @@
     ],
     "defaultMode": "bypassPermissions"
   },
-  "model": "opus[1m]",
+  "model": "claude-fable-5-1[1m]",
   "enabledPlugins": {
-    "rust-analyzer-lsp@claude-plugins-official": false
+    "rust-analyzer-lsp@claude-plugins-official": false,
+    "build-loop@build-loop": true
+  },
+  "extraKnownMarketplaces": {
+    "build-loop": {
+      "source": {
+        "source": "directory",
+        "path": "/home/dima/dev/build-loop"
+      }
+    }
   },
   "effortLevel": "xhigh",
   "tui": "fullscreen",
   "skipDangerousModePermissionPrompt": true,
   "skipWorkflowUsageWarning": true,
-  "theme": "dark"
+  "theme": "dark",
+  "agentPushNotifEnabled": true
 }
