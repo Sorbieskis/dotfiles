@@ -1,80 +1,120 @@
 # This machine: osnova-vps (PRODUCTION + personal dev)
 
-Hetzner CPX32 (4 vCPU / 8 GB) running BOTH live production services and dima's
-personal dev environment. Unlike a disposable devbox, mistakes here take down
-services people use.
+netcup RS 4000 G12 (12 dedicated EPYC cores / 32 GB ECC / 1 TB NVMe), Debian 13,
+hostname `osnova-vps`, public IPv4 159.195.252.239. Runs BOTH live production
+services and dima's personal dev environment (decided 2026-09-07: a separate prod
+host or VM only once colleagues depend on it daily). Unlike a disposable devbox,
+mistakes here take down services people use.
 
-**A move to a netcup root server is planned (prep done 2026-09-04, box not ordered yet).**
-Runbook: `~/dev/osnova-infra/MIGRATION.md`; data mover: `scripts/migrate-pull.sh` there.
-Until the cutover nothing about this box changes — the Tailscale IP below is meant to be
-pinned onto the new node so these notes stay true.
+**Migrated from the Hetzner CPX32 on 2026-09-07.** Old box 178.104.79.134
+(Tailscale `osnova-vps-old` after the rename): stacks stopped, kept as rollback
+until ~2026-09-14. Runbook: `~/dev/osnova-infra/MIGRATION.md`.
 
-## Production on this box (Docker — do not disturb casually)
+Tailscale: the box joins as `osnova-vps-new`; after the admin-console pin it is
+`osnova-vps` with the SAME tailnet IP 100.93.13.127 as before, so photo-drop
+(http://100.93.13.127:8123) and dockge (http://100.93.13.127:5001) stay valid.
+Until dima completes the Tailscale login + pin it is reachable only as
+`ssh dima@159.195.252.239` / `ssh root@159.195.252.239` (key-only; public 22 is
+temporarily open and will be closed once Tailscale SSH is confirmed).
 
-- Caddy (:80/:443), Outline wiki (wiki.osnovasystems.com), Forgejo
-  (git.osnovasystems.com, SSH :222), Postgres, Dockge, diun, Minecraft.
-- **Minecraft is STOPPED AND DISABLED (2026-08-11)** to free RAM for dev work —
-  `mc_fabric` + `mc_backup`, stack at `/root/minecraft-server`, idle since
-  2026-05-03. World data (`mc-data`, 907M) + backups (`mc-backups`, 696M) are
-  bind mounts on disk and were untouched by the teardown.
-  **Restart: `sudo systemctl enable --now minecraft.service`** (drop `enable` for
-  a one-off that dies at the next reboot).
-  ⚠ **`docker stop` DOES NOT HOLD, and the old note here claiming
-  `restart: unless-stopped` made it survive reboots was WRONG** — that policy only
-  stops the *daemon* restarting it. `minecraft.service` (systemd, `WantedBy=multi-user.target`)
-  ran `docker compose up -d` on every boot, and compose starts stopped containers.
-  With the ~04:00 auto-reboot, every `docker stop` was undone by the next morning:
-  that is why this note kept going stale. Disabling the unit is what makes it stick.
-  ⚠ **Second resurrection, independent of the first:** `PAUSE_WHEN_EMPTY_SECONDS: 60`
-  + `restart: unless-stopped` is a LOOP on an idle server — the server stops itself
-  when empty, the container exits 0, Docker restarts it, a fresh JVM allocates 5 GB,
-  and 60 s later it does it again (`RestartCount` was **43** in 3 days). If it ever
-  comes back, fix that pairing or it churns RAM while nobody is playing.
-  **Treat the stop as reversible** — the RAM note below flips back the moment it returns.
-- Infra-as-code lives in `~/dev/osnova-infra` — read its CLAUDE.md before
-  touching anything host- or stack-related. Never edit `/opt/stacks` directly:
-  edit the repo, push, deploy via `./scripts/deploy.sh <service>`.
+## Production on this box (Docker, do not disturb casually)
+
+- Caddy (:80/:443), Outline (wiki.osnovasystems.com), Forgejo
+  (git.osnovasystems.com, +registry, SSH :222), Pocket-ID, osnova-product +
+  staging, Postgres, Dockge, diun, livesync (CouchDB + bridge), forgejo-runner
+  (host unit), nginx modpack site :8080.
+- Minecraft: stopped and disabled, stack at `/opt/stacks/minecraft`, world +
+  backups migrated, now a 7 GB cap and `restart: on-failure` (the old
+  idle-restart churn is gone). Start: `sudo systemctl enable --now minecraft.service`.
+- Infra-as-code: `~/dev/osnova-infra`. Read its CLAUDE.md before touching
+  anything host- or stack-related. Never edit `/opt/stacks` directly: edit the
+  repo, push, deploy via `./scripts/deploy.sh <service>`. A weekly drift check
+  pings ntfy if `/opt/stacks` diverges from the repo.
 
 ## Dev workflow
 
-- Projects live in `~/dev/<project>`; prefer one Claude conversation per
-  project (new tab: `zellij action new-tab --name <p> --cwd ~/dev/<p>`).
-  Persistent session: `main`
-  — attach with `zellij attach main`, never bare `zellij` (creates strays).
-- sudo is passwordless. Docker available. Python via `uv`; node from apt.
-- RAM is tight (8 GB shared with the stack): earlyoom kills build tools first
-  under pressure. **While Minecraft is stopped (see above, 2026-07-24) there is
-  ~4.8 GB available** instead of ~2.3 GB — ⚠ **measured 1.3 GB on 2026-09-02** with 4 GB in swap: `osnova-product-staging`, `dsh-play`, `pocket-id` and the livesync pair have joined since — so a single cargo build or a language
-  server is comfortable — still avoid *parallel* builds. If Minecraft is
-  restarted, the JVM takes ~2.4 GB resident (heap cap 5 GB, no container memory
-  limit) and the old "avoid anything heavy" rule applies again. Check with
-  `free -m` rather than assuming.
-- The box may auto-reboot ~04:00 for security updates; the `main` session
-  recreates itself and Claude resumes, but dev servers need restarting.
-- SSH is Tailscale-only (public 22 closed). The Forgejo git remote uses port 222.
-  ⚠ **The "break-glass = Hetzner console" line here was WRONG and was removed
-  2026-08-13.** Measured: `passwd -S root` and `passwd -S dima` both return `L`
-  (locked), so the Cloud Console offers a login prompt no password satisfies.
-  Losing Tailscale = losing every admin path; real recovery is GRUB
-  `init=/bin/bash` or the Hetzner rescue system, neither tested. Carded in the
-  vault Founder queue `<#13>`; `osnova-infra/CLAUDE.md` still carries the old
-  claim. Also unsettled there: its README says UFW allows 22, its CLAUDE.md says
-  it does not, and nobody has read the live rules.
-- **Sending images to an agent from the phone: `photo-drop`** (2026-08-13). A
-  terminal session can't take an attachment, so photos go through
+- Projects live in `~/dev/<project>`: flat, one dir per repo, NEVER moved
+  (Claude Code history and memory are keyed by path). One Claude conversation
+  per project (new tab: `zellij action new-tab --name <p> --cwd ~/dev/<p>`).
+  Persistent session `main`: `zellij attach main`, never bare `zellij` (creates
+  strays). Recreated at boot by the user unit `zellij-main.service`.
+- RAM: 32 GB. The `main` session runs inside `zellij-main.service` with
+  MemoryMax=20G, so everything started in it (Claude Code, cargo, node) shares a
+  20 GB cap and cannot evict the stacks. earlyoom prefers killing
+  cargo/rustc/clippy/rust-analyzer/node/python3 and never
+  claude/zellij/postgres/docker/sshd/tailscaled. Check with `free -m`. Truly
+  huge builds go outside zellij: `systemd-run --user -p MemoryMax=8G --scope cargo …`.
+- sudo is passwordless. Docker available. The box may auto-reboot ~04:00 for
+  security updates; the `main` session recreates itself and Claude resumes, but
+  dev servers need restarting.
+- SSH is Tailscale-only once public 22 is closed. The Forgejo git remote uses
+  port 222. Console break-glass: netcup SCP VNC console. Open item (2026-09-07):
+  set `passwd dima`, lock root (root has a temporary console-only password;
+  sshd is key-only).
+- Sending images to an agent from the phone: `photo-drop` (unchanged).
   http://100.93.13.127:8123 (tailnet-only, `photo-drop.service`, always up).
-  One pick = one numbered batch in `~/drop/<n>/`, plus an optional note typed on
-  the phone keyboard. Then "look at the newest" or "batch 7" — read `note.md`
-  and the shots. Source: `~/.dotfiles/bin/photo-drop`.
-- **Two GitHub accounts** (2026-08-13): `Sorbieskis` (personal) and `dsuchank`
+  One pick = one numbered batch in `~/drop/<n>/` plus an optional note. Then
+  "look at the newest" or "batch 7": read `note.md` and the shots. Source:
+  `~/.dotfiles/bin/photo-drop`.
+- Two GitHub accounts (unchanged): `Sorbieskis` (personal) and `dsuchank`
   (`~/dev/asml`, own key + noreply email via an `includeIf`). Keep `Sorbieskis`
-  the ACTIVE gh account and use `ghw <cmd>` for work — `gh auth switch` is
+  the ACTIVE gh account and use `ghw <cmd>` for work: `gh auth switch` is
   global, and osnova-product's `./bin/ci` then 404s on a repo the work account
   can't see and reports "API unreachable", which looks like CI being down.
+
+## What lives where
+
+```
+~/dev/<repo>            code, flat, one dir per repo, NEVER moved (CC history/memory keyed by path)
+~/dev/asml/             work account (dsuchank)
+~/dev/osnova-infra      source of /opt/stacks (deploy.sh) and host config (bootstrap.sh); never edit /opt/stacks by hand
+~/lab/YYYY-MM-slug      experiments + lab-* containers, expire 60 days after last change (planned, dir not created yet)
+~/drop/<n>/             phone batches from photo-drop (http://100.93.13.127:8123)
+~/vault/                Obsidian; livesync bridge writes here; hourly git push via crontab (bin/vault-backup.sh)
+~/.dotfiles/            fish/nvim/yazi/zellij/git config, mise manifest, user units, bin/ scripts, claude/ tracked parts, install.sh
+  ~/.claude/{CLAUDE.md,settings.json,skills} are symlinks INTO it; everything else in ~/.claude is state, never tracked
+~/.local/bin/           mise binary + symlinks to .dotfiles/bin (work, dsh, photo-drop, osnova-pull, vault-backup.sh, zellij-main-boot.sh)
+~/.local/share/mise     every mise-managed tool (node, python, uv, zellij, ...); nothing hand-placed in ~/.local/bin or /usr/local/bin
+~/.local/opt/           hand-installed trees not on PATH by themselves, e.g. verapdf (planned, not done)
+~/.venvs/pw             Playwright venv (uv). ~/.cache ~/.cargo ~/.rustup ~/.npm ~/.venvs are rebuildable: not backed up, not migrated
+~/bin                   retired 2026-09-07; its scripts moved to ~/.dotfiles/bin
+~/.config/systemd/user  photo-drop.service, zellij-main.{service,timer} (all in .dotfiles/systemd/user)
+/opt/stacks/<svc>       running prod compose + decrypted .env (generated by deploy.sh, root-deployed)
+/opt/scripts            pg-backup, uptime-check, box-cleanup, stack-drift (from osnova-infra/scripts)
+/var/backups/postgres   daily pg-backup dumps; offsite copy (restic) planned, not set up (verify)
+/etc/systemd/system     forgejo-runner, minecraft (both in osnova-infra/host/systemd)
+Docker: project = prod stack name | osnova-dev (dev pg 5433) | lab-*; anything unlabeled is a leak. Networks: web, db (prod only) | lab
+Secrets: SOPS .env.enc in osnova-infra, age key /root/.config/sops/age (Bitwarden); API keys only in ~/.config/fish/secrets.fish (untracked)
+```
+
+## One way of doing everything (decided 2026-09-07)
+
+- apt: daemons, system libraries, Debian-packaged CLI tools (osnova-infra
+  bootstrap.sh). One Java: default-jre, pulled in by plantuml.
+- mise: every user-level runtime and CLI tool (node, python, uv, zellij, yazi,
+  lazygit, lazydocker, starship, zoxide, mcfly, typst, dbmate), declared in
+  `~/.dotfiles/mise/config.toml` (→ `~/.config/mise/config.toml`). fish
+  activates mise.
+- rustup: Rust only, version pinned by each repo's `rust-toolchain.toml`.
+- uv: Python project envs. The Playwright venv `~/.venvs/pw` is built by uv from
+  `osnova-product/tests/ui-smoke/requirements.txt`.
+- `~/.dotfiles/install.sh` applies the whole dima layer idempotently: symlinks,
+  `mise install`, rustup, fish as login shell, user units photo-drop +
+  zellij-main, hourly vault-backup crontab. The old Void-only bootstrap.sh is
+  superseded.
+- Rule: nothing hand-placed in `/usr/local/bin` or `~/.local/bin` any more.
+  Add it to the mise manifest. `~/bin` is retired; scripts live in
+  `~/.dotfiles/bin`, linked into `~/.local/bin` by install.sh.
+- Docker: compose project = prod stack name | `osnova-dev` (dev postgres
+  `osnova-pg-dev`, 127.0.0.1:5433, label tier=dev, 2 GB cap) | `lab-*` for
+  experiments (named YYYY-MM-slug under `~/lab`, expire after 60 days). An
+  unlabeled container is a leak. Networks: web, db (prod only) | lab.
 
 ## Don'ts
 
 - Don't reconfigure ufw, sshd, tailscale, or the zellij-main service/timer
   unless explicitly asked.
 - Don't restart Docker or production containers as a debugging reflex.
-- Don't put secrets in repos — SOPS for infra, `.env` (gitignored) for dev.
+- Don't put secrets in repos: SOPS for infra, `.env` (gitignored) for dev.
+- Don't hand-install tools; add them to `~/.dotfiles/mise/config.toml`.
+- Don't start containers without a compose project name or tier label.
