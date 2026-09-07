@@ -1,0 +1,20 @@
+# The one place user-level runtimes and CLI tools are declared. `mise install` installs them,
+# fish activates them (fish/config.fish), install.sh links this file to ~/.config/mise/config.toml.
+# System packages and daemons are osnova-infra's bootstrap.sh (apt); Rust is rustup (pinned by
+# each repo's rust-toolchain.toml); Python project envs are uv (installed here).
+[tools]
+node = "lts"
+python = "3.12"
+uv = "latest"
+zellij = "0.43.0"
+yazi = "latest"
+lazygit = "0.61.1"
+lazydocker = "0.25.2"
+starship = "1.25.1"
+zoxide = "0.9.9"
+"ubi:cantino/mcfly" = { version = "v0.9.4", exe = "mcfly" }
+typst = "0.15.1"
+dbmate = "2.33.0"
+
+[settings]
+experimental = true

@@ -1,0 +1,16 @@
+#!/bin/bash
+set -euo pipefail
+if [[ $# -ne 1 ]]; then
+    echo "usage: work <project>"
+    ls ~/dev 2>/dev/null || echo "  (none)"
+    exit 1
+fi
+PROJECT="$1"
+PROJECT_DIR="$HOME/dev/$PROJECT"
+[[ -d "$PROJECT_DIR" ]] || { echo "error: $PROJECT_DIR not found"; exit 1; }
+cd "$PROJECT_DIR"
+if zellij list-sessions 2>/dev/null | grep -q "^$PROJECT "; then
+    exec zellij attach "$PROJECT"
+else
+    exec zellij --session "$PROJECT" options --default-cwd "$PROJECT_DIR"
+fi

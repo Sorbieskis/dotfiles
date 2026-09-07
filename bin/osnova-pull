@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Pull latest for the vault + all osnova dev repos on the VPS.
+set -e
+for r in ~/vault ~/dev/osnova-infra ~/dev/osnova-product ~/dev/osnova-marketing; do
+  printf '== %s ==\n' "${r/#$HOME/~}"
+  git -C "$r" pull --ff-only 2>&1 | tail -1
+done

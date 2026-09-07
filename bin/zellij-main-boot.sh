@@ -23,7 +23,7 @@ mkdir -p "$HOME/.cache"
 exec 9>"$HOME/.cache/zellij-main-boot.lock"
 flock -n 9 || exit 0
 
-export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+export PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"   # zellij is a mise tool
 SESSION=main
 
 # If a *live* (non-exited) session already exists, do nothing.

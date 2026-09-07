@@ -4,6 +4,12 @@ set -x EDITOR nvim
 fish_add_path $HOME/.cargo/bin
 fish_add_path $HOME/.local/bin
 
+# mise is THE manager for user-level runtimes and CLI tools (node, python, zellij, starship, …):
+# ~/.config/mise/config.toml → ~/.dotfiles/mise/config.toml. Activate before starship/mcfly/zoxide init.
+if type -q mise
+    mise activate fish | source
+end
+
 # Podman socket — only set if podman is installed
 if command -q podman
     set -gx DOCKER_HOST "unix://$XDG_RUNTIME_DIR/podman/podman.sock"
