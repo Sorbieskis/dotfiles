@@ -10,12 +10,10 @@ mistakes here take down services people use.
 (Tailscale `osnova-vps-old` after the rename): stacks stopped, kept as rollback
 until ~2026-09-14. Runbook: `~/dev/osnova-infra/MIGRATION.md`.
 
-Tailscale: the box joins as `osnova-vps-new`; after the admin-console pin it is
-`osnova-vps` with the SAME tailnet IP 100.93.13.127 as before, so photo-drop
-(http://100.93.13.127:8123) and dockge (http://100.93.13.127:5001) stay valid.
-Until dima completes the Tailscale login + pin it is reachable only as
-`ssh dima@159.195.252.239` / `ssh root@159.195.252.239` (key-only; public 22 is
-temporarily open and will be closed once Tailscale SSH is confirmed).
+Tailscale: this box is `osnova-vps` at 100.93.13.127 (pinned 2026-09-07, same address as
+the old box), so photo-drop (http://100.93.13.127:8123) and dockge (http://100.93.13.127:5001)
+kept their URLs. Admin SSH is Tailscale SSH only: `ssh dima@osnova-vps` / `ssh root@osnova-vps`.
+Public 22 is closed (UFW) and filtered (netcup SCP policy `osnova-vps`, 2026-09-10).
 
 ## Production on this box (Docker, do not disturb casually)
 
