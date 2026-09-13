@@ -33,6 +33,15 @@ command -v mise >/dev/null 2>&1 || curl -fsSL https://mise.run | sh     # lands 
 ~/.local/bin/mise install --yes
 ~/.local/bin/mise reshim
 
+echo "==> python libraries into mise's interpreter"
+# osnova-product's `bin/lane login` imports PyYAML under `#!/usr/bin/env python3`, which resolves
+# to mise's 3.12 here — the apt python3-yaml is installed but invisible to it. NOT declared in
+# mise/config.toml: that manifest is tools and runtimes, not libraries. `mise which` because
+# neither uv nor mise is on PATH in a login shell that has not activated mise (this script is
+# what a from-zero box runs). Idempotent: uv audits and exits, ~0.1 s and no network, when the
+# requirement is already satisfied.
+"$(~/.local/bin/mise which uv)" pip install --python "$(~/.local/bin/mise which python)" pyyaml
+
 echo "==> rustup (Rust only)"
 [ -x ~/.cargo/bin/rustup ] || curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --no-modify-path
 
