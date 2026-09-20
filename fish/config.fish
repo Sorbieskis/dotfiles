@@ -96,7 +96,15 @@ function o --description 'osnova-product bin/ tools (o help)'
         set root $canon
     end
     if test (count $argv) -eq 0
-        $root/bin/help 2>/dev/null; or $canon/bin/help
+        # `test -x` first, NOT `$root/bin/help 2>/dev/null; or …`: fish prints its own
+        # "Unknown command" diagnostic for a missing binary, and no stdio redirection on a
+        # command that never launched can suppress it — the fallback worked but looked like a
+        # crash in a slot whose branch predates bin/help.
+        if test -x $root/bin/help
+            $root/bin/help
+        else
+            $canon/bin/help
+        end
         return $status
     end
     set -l tool $root/bin/$argv[1]
