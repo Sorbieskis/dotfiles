@@ -79,3 +79,46 @@ function ghw
     set -lx GH_TOKEN $tok
     gh $argv
 end
+
+# ── o — the osnova-product toolbelt, typed by hand ────────────────────────────────────
+# `o board next` · `o ci --check` · `o help` (the whole page) · `o help ci` (one tool's docs).
+# The repo is resolved from $PWD, so inside a worktree slot (~/wt/osnova-N) `o check` checks
+# THAT tree; hard-coding ~/dev/osnova-product would quietly check a different one.
+#
+# ⚠ The marker is `bin/board`, which every branch has — NOT `bin/help`. Keying the fallback on
+# the newest tool means a slot on a branch that predates it resolves to the MAIN checkout, so
+# `o check` / `o gate` would run against a tree the operator is not looking at. The one thing
+# that does fall back is the help page itself: `o help` must answer everywhere.
+function o --description 'osnova-product bin/ tools (o help)'
+    set -l canon $HOME/dev/osnova-product
+    set -l root (git rev-parse --show-toplevel 2>/dev/null)
+    if test -z "$root"; or not test -x "$root/bin/board"
+        set root $canon
+    end
+    if test (count $argv) -eq 0
+        $root/bin/help 2>/dev/null; or $canon/bin/help
+        return $status
+    end
+    set -l tool $root/bin/$argv[1]
+    if not test -x $tool
+        if test "$argv[1]" = help
+            $canon/bin/help $argv[2..]
+            return $status
+        end
+        echo "o: $argv[1] is not in "(string replace $HOME '~' $root)"/bin — try `o help`" >&2
+        return 127
+    end
+    # env --chdir, not cd: these tools want the repo root as cwd (cargo walks up from it), and
+    # a ctrl-C must not leave the interactive shell parked in another directory.
+    env --chdir=$root $tool $argv[2..]
+end
+
+# Tool names + blurbs come from bin/help itself, so the completion cannot drift from the page.
+# The canonical checkout is fine here even inside a slot: the names are the same in every clone.
+complete -c o -f -n __fish_is_first_arg -a '($HOME/dev/osnova-product/bin/help --complete)'
+complete -c o -f -n '__fish_seen_subcommand_from board' -a 'next prod loop product deps'
+complete -c o -f -n '__fish_seen_subcommand_from lane' -a 'status score prep dispatch land exec clean install selftest'
+complete -c o -f -n '__fish_seen_subcommand_from wt' -a 'ls holders claim release gc new rm'
+complete -c o -f -n '__fish_seen_subcommand_from mq' -a 'status land'
+complete -c o -f -n '__fish_seen_subcommand_from seat' -a 'routes build chores round evaluate shadow'
+complete -c o -f -n '__fish_seen_subcommand_from psi-watch' -a 'report sample watch'
