@@ -116,26 +116,28 @@ fi
 # 0.87.1, and even dsh 0.1.7-rc.1's dsh-llm-pi-ai pins `^0.85.1` (= <0.86), so no dsh upgrade
 # reaches them (checked 2026-09-23). A `models` list REPLACES the served catalogue, so it
 # must re-list every installed id (an `{id}` entry inherits its catalogue fields) plus the
-# missing one spelled out. Fields copied from pi-ai 0.87.1's catalogue. Self-retiring: once
-# the installed catalogue carries the model, nothing is declared.
+# missing ones spelled out. Fields copied from pi-ai 0.87.1's catalogue. Declared on EVERY
+# route, not just the one started on: the in-session /model picker lists only what the
+# provider serves. Self-retiring: once the installed catalogue carries them, nothing is declared.
 CATALOG="$LANE/dsh/node_modules/@earendil-works/pi-ai/dist/providers/data/openai-codex.json"
 declare_models=""
-if [ "$provider" = openai-codex ] && [ -r "$CATALOG" ]; then
-  declare_models=$(python3 - "$CATALOG" "$model" <<'PY'
+if [ -r "$CATALOG" ]; then
+  declare_models=$(python3 - "$CATALOG" <<'PY'
 import json, sys
 ids = sorted({m for v in json.load(open(sys.argv[1])).values() for m in v})
-want = sys.argv[2]
-if want in ids or not want.startswith("gpt-6-"):
+extra = [m for m in ("gpt-6-luna", "gpt-6-sol") if m not in ids]
+if not extra:
     sys.exit(0)
 for i in ids:
     print(f"          - id: {i}")
 efforts = {"off": "none", "minimal": "low", "low": "low", "medium": "medium",
            "high": "high", "xhigh": "xhigh", "max": "max"}
-print(f"          - id: {want}")
-print("            contextWindow: 272000")
-print("            maxTokens: 128000")
-print("            input: [text, image]")
-print("            reasoningEfforts: " + json.dumps(efforts))
+for m in extra:
+    print(f"          - id: {m}")
+    print("            contextWindow: 272000")
+    print("            maxTokens: 128000")
+    print("            input: [text, image]")
+    print("            reasoningEfforts: " + json.dumps(efforts))
 PY
 )
 fi
@@ -157,12 +159,12 @@ trap 'rm -f "$overlay"' EXIT
   # A grant route must also be DECLARED, not merely selected: dsh answers a provider that no
   # `llm-pi-ai.providers` entry declares with `NO_ADAPTER`, which reads exactly like a typo'd
   # model id. Same two-entry shape `bin/lane`'s write_model_patch uses.
-  if [ "$provider" = "openai-codex" ]; then
+  if [ "$provider" = "openai-codex" ] || [ -n "$declare_models" ]; then
     echo "- id: llm-pi-ai"
     echo "  config:"
     echo "    providers:"
     if [ -n "$declare_models" ]; then
-      echo "      $provider:"
+      echo "      openai-codex:"
       echo "        models:"
       printf '%s\n' "$declare_models"
     else
