@@ -44,7 +44,8 @@ usage() {
   cat <<EOF
 usage: dsh [route] [-- dsh args...]
 
-  route    luna (default) · sol · terra · v4 · v4-pro, or a bare deepseek-* model id.
+  route    luna (default) · sol · terra · astra · luna6 · sol6 · v4 · v4-pro,
+           or a bare deepseek-* model id.
            Resolved through osnova-product's \`bin/lane resolve-route\` when that checkout
            has it, so the route words cannot drift from the lane's own list.
 
@@ -88,6 +89,8 @@ else
     luna)  provider=openai-codex; model=gpt-5.6-luna ;;
     sol)   provider=openai-codex; model=gpt-5.6-sol ;;
     terra) provider=openai-codex; model=gpt-5.6-terra ;;
+    luna6) provider=openai-codex; model=gpt-6-luna ;;
+    sol6)  provider=openai-codex; model=gpt-6-sol ;;
     v4|deepseek)         provider=deepseek-official; model=deepseek-v4-flash-vision-exp ;;
     v4-pro|deepseek-pro) provider=deepseek-official; model=deepseek-v4-pro ;;
     deepseek-*)          provider=deepseek-official; model="$route" ;;
@@ -106,6 +109,35 @@ bridge=off
 if [ -n "$bridge_dir" ] && [ -n "$git_root" ] \
    && [ "$(realpath "$git_root")" = "$(realpath "$bridge_dir" 2>/dev/null)" ]; then
   bridge=on
+fi
+
+# ⚠ THE CATALOGUE IS THE WHITELIST: a model pi-ai's installed openai-codex catalogue does not
+# carry answers UNKNOWN_MODEL before any network call. gpt-6-luna/-sol first ship in pi-ai
+# 0.87.1, and even dsh 0.1.7-rc.1's dsh-llm-pi-ai pins `^0.85.1` (= <0.86), so no dsh upgrade
+# reaches them (checked 2026-09-23). A `models` list REPLACES the served catalogue, so it
+# must re-list every installed id (an `{id}` entry inherits its catalogue fields) plus the
+# missing one spelled out. Fields copied from pi-ai 0.87.1's catalogue. Self-retiring: once
+# the installed catalogue carries the model, nothing is declared.
+CATALOG="$LANE/dsh/node_modules/@earendil-works/pi-ai/dist/providers/data/openai-codex.json"
+declare_models=""
+if [ "$provider" = openai-codex ] && [ -r "$CATALOG" ]; then
+  declare_models=$(python3 - "$CATALOG" "$model" <<'PY'
+import json, sys
+ids = sorted({m for v in json.load(open(sys.argv[1])).values() for m in v})
+want = sys.argv[2]
+if want in ids or not want.startswith("gpt-6-"):
+    sys.exit(0)
+for i in ids:
+    print(f"          - id: {i}")
+efforts = {"off": "none", "minimal": "low", "low": "low", "medium": "medium",
+           "high": "high", "xhigh": "xhigh", "max": "max"}
+print(f"          - id: {want}")
+print("            contextWindow: 272000")
+print("            maxTokens: 128000")
+print("            input: [text, image]")
+print("            reasoningEfforts: " + json.dumps(efforts))
+PY
+)
 fi
 
 overlay=$(mktemp -t dsh-overlay-XXXXXX.yml)
@@ -129,7 +161,13 @@ trap 'rm -f "$overlay"' EXIT
     echo "- id: llm-pi-ai"
     echo "  config:"
     echo "    providers:"
-    echo "      $provider: {}"
+    if [ -n "$declare_models" ]; then
+      echo "      $provider:"
+      echo "        models:"
+      printf '%s\n' "$declare_models"
+    else
+      echo "      $provider: {}"
+    fi
   fi
 } > "$overlay"
 
