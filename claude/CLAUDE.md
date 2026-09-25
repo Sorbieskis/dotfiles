@@ -65,6 +65,7 @@ Public 22 is closed (UFW) and filtered (netcup SCP policy `osnova-vps`, 2026-09-
 
 ```
 ~/dev/<repo>            code, flat, one dir per repo, NEVER moved (CC history/memory keyed by path)
+~/dev/osnova-marketing-model  the one exception: a second clone of osnova-marketing for its model session (repo decision 34); its CC memory dir links to the main clone's
 ~/dev/asml/             work account (dsuchank)
 ~/dev/osnova-infra      source of /opt/stacks (deploy.sh) and host config (bootstrap.sh); never edit /opt/stacks by hand
 ~/lab/YYYY-MM-slug      experiments + lab-* containers, expire 60 days after last change (planned, dir not created yet)
