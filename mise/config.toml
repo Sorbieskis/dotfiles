@@ -15,6 +15,7 @@ zoxide = "0.9.9"
 "ubi:cantino/mcfly" = { version = "v0.9.4", exe = "mcfly" }
 typst = "0.15.1"
 dbmate = "2.33.0"
+"github:zeux/meshoptimizer" = { version = "v1.2", asset_pattern = "gltfpack-ubuntu.zip", bin = "gltfpack" }  # glTF optimiser (marketing 3D model)
 
 [settings]
 experimental = true
