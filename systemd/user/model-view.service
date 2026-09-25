@@ -1,0 +1,19 @@
+[Unit]
+Description=model-view — the marketing site's 3D model inspector on the tailnet (phone viewing)
+# Serves the model session's clone ~/dev/osnova-marketing-model (decision 34) through model/serve.py: tools/glbview.html with the
+# site's look, the GLBs, look.js and fonts, nothing else. http://<tailscale ip>:8125/
+# Like photo-drop: tailscaled is a SYSTEM unit, so the script polls 60 s for the tailnet address and
+# exits non-zero without one (never a loopback bind), which Restart=always retries.
+After=network-online.target
+# A box without the model clone skips the unit instead of restarting it every 10 s.
+ConditionPathExists=%h/dev/osnova-marketing-model/model/serve.py
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/dev/osnova-marketing-model/model/serve.py
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

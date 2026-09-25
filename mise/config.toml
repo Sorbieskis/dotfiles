@@ -16,6 +16,7 @@ zoxide = "0.9.9"
 typst = "0.15.1"
 dbmate = "2.33.0"
 "github:zeux/meshoptimizer" = { version = "v1.2", asset_pattern = "gltfpack-ubuntu.zip", bin = "gltfpack" }  # glTF optimiser (marketing 3D model)
+blender = "5.2.2"  # LTS, official build with its own Python + numpy; replaces Debian's 4.3 (marketing 3D model, 2026-09-26)
 
 [settings]
 experimental = true
