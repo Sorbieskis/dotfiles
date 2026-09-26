@@ -104,7 +104,8 @@ Secrets: SOPS .env.enc in osnova-infra, age key /root/.config/sops/age (Bitwarde
 - apt: daemons, system libraries, Debian-packaged CLI tools (osnova-infra
   bootstrap.sh). One Java: default-jre, pulled in by plantuml.
 - mise: every user-level runtime and CLI tool (node, python, uv, zellij, yazi,
-  lazygit, lazydocker, starship, zoxide, mcfly, typst, dbmate), declared in
+  lazygit, lazydocker, starship, zoxide, mcfly, typst, dbmate, blender 5.2 LTS
+  and gltfpack for the 3D pipeline; Debian's blender is not used), declared in
   `~/.dotfiles/mise/config.toml` (→ `~/.config/mise/config.toml`). fish
   activates mise.
 - rustup: Rust only, version pinned by each repo's `rust-toolchain.toml`.
