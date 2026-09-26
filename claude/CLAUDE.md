@@ -81,12 +81,15 @@ Public 22 is closed (UFW) and filtered (netcup SCP policy `osnova-vps`, 2026-09-
 ~/dev/osnova-infra      source of /opt/stacks (deploy.sh) and host config (bootstrap.sh); never edit /opt/stacks by hand
 ~/lab/YYYY-MM-slug      experiments + lab-* containers, expire 60 days after last change (in use since 2026-09, expiry not automated yet; its GLBs show in the model viewer)
 ~/drop/<n>/             phone batches from photo-drop (http://100.93.13.127:8123)
+~/wt/osnova-<n>         osnova-product `bin/wt` slots: warm git worktrees with build caches (~260 GB for 6, by design); manage with bin/wt, never rm by hand
+~/dsh-play/             the dsh seat + build lane's home (lane scratch clones, relay, replays; ~110 GB, mostly build output)
+~/git/<name>.git        local bare remotes (locator.git is ~/dev/asml/locator's remote)
 ~/vault/                Obsidian; livesync bridge writes here; hourly git push via crontab (bin/vault-backup.sh)
 ~/.dotfiles/            fish/nvim/yazi/zellij/git config, mise manifest, user units, bin/ scripts, claude/ tracked parts, install.sh
   ~/.claude/{CLAUDE.md,settings.json,skills} are symlinks INTO it; everything else in ~/.claude is state, never tracked
 ~/.local/bin/           mise binary + symlinks to .dotfiles/bin (work, dsh, photo-drop, osnova-pull, vault-backup.sh, zellij-main-boot.sh)
 ~/.local/share/mise     every mise-managed tool (node, python, uv, zellij, ...); nothing hand-placed in ~/.local/bin or /usr/local/bin
-~/.local/opt/           hand-installed trees not on PATH by themselves, e.g. verapdf (planned, not done)
+~/.local/opt/           hand-installed trees not on PATH by themselves: verapdf (moved here 2026-09-27)
 ~/.venvs/pw             Playwright venv (uv). ~/.cache ~/.cargo ~/.rustup ~/.npm ~/.venvs are rebuildable: not backed up, not migrated
 ~/bin                   retired 2026-09-07; its scripts moved to ~/.dotfiles/bin
 ~/.config/systemd/user  photo-drop.service, model-view.service (3D model viewer for the phone, marketing models
