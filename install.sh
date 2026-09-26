@@ -26,6 +26,11 @@ ln -sfn "$D/claude/skills"           ~/.claude/skills
 
 echo "==> scripts and user units"
 for b in "$D"/bin/*; do [ -f "$b" ] || continue; chmod +x "$b"; ln -sf "$b" ~/.local/bin/"$(basename "$b")"; done
+# Debian renames these two (batcat, fdfind); apt stays their source, this only restores the name.
+command -v batcat >/dev/null && ln -sf "$(command -v batcat)" ~/.local/bin/bat
+[ -x /usr/lib/cargo/bin/fd ] && ln -sf /usr/lib/cargo/bin/fd ~/.local/bin/fd
+# the osnova board from any directory
+[ -x ~/dev/osnova-product/bin/board ] && ln -sf ~/dev/osnova-product/bin/board ~/.local/bin/board
 for u in "$D"/systemd/user/*; do ln -sf "$u" ~/.config/systemd/user/"$(basename "$u")"; done
 
 echo "==> mise: runtimes and CLI tools"

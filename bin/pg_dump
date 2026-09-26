@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# pg_dump shim — the host has no postgresql-client, but the dev DB container does,
+# at exactly the version that generated the committed db/schema.sql (its header names it;
+# osnova-product/docker/dev.compose.yaml pins that image by digest). Running
+# the container's binary keeps `dbmate dump` diffs byte-clean; a host pg_dump 17
+# (what Debian 13 ships) would rewrite the whole file's header on every regen.
+#
+# The dev DB maps container 5432 -> host 127.0.0.1:5433, so any connection URL
+# passed through has to be rewritten back to the in-container port.
+set -euo pipefail
+
+CONTAINER=osnova-pg-dev
+
+args=()
+for a in "$@"; do
+    a=${a//localhost:5433/127.0.0.1:5432}
+    a=${a//127.0.0.1:5433/127.0.0.1:5432}
+    args+=("$a")
+done
+
+exec docker exec -i "$CONTAINER" pg_dump "${args[@]}"
