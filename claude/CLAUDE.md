@@ -61,7 +61,7 @@ Public 22 is closed (UFW) and filtered (netcup SCP policy `osnova-vps`, 2026-09-
   the `.glb` under `~/lab/YYYY-MM-slug/` and send
   `http://100.93.13.127:8125/?glb=/r/lab/YYYY-MM-slug/<file>.glb` (`&lines=1` for a
   `<file>_lines.glb` drawing twin). A project that keeps its own models gets its own
-  folder in the unit (`--root NAME=PATH`, then `/r/NAME/...`); never `~/dev/asml`.
+  folder in the unit (`--root NAME=PATH`, then `/r/NAME/...`; the SCHK site's is `schk`); never `~/dev/asml`.
   The marketing laser cutter is the built-in root (`?size=6025&view=door&door=1`).
   He answers with its Send view button: picture, note and a link to that exact view
   land in `~/drop` like a photo-drop batch. Source:
@@ -76,7 +76,8 @@ Public 22 is closed (UFW) and filtered (netcup SCP policy `osnova-vps`, 2026-09-
 
 ```
 ~/dev/<repo>            code, flat, one dir per repo, NEVER moved (CC history/memory keyed by path)
-~/dev/osnova-marketing-model  the one exception: a second clone of osnova-marketing for its model session (repo decision 34); its CC memory dir links to the main clone's
+~/dev/osnova-marketing-model  exception 1: a second clone of osnova-marketing for its model session (repo decision 34); its CC memory dir links to the main clone's
+~/dev/schk-software-model     exception 2: the same for schk-software (repo decision 18); its models/ is the model viewer's root `schk` (/r/schk/...)
 ~/dev/asml/             work account (dsuchank)
 ~/dev/osnova-infra      source of /opt/stacks (deploy.sh) and host config (bootstrap.sh); never edit /opt/stacks by hand
 ~/lab/YYYY-MM-slug      experiments + lab-* containers, expire 60 days after last change (in use since 2026-09, expiry not automated yet; its GLBs show in the model viewer)
