@@ -1,0 +1,38 @@
+# Extends the default ruleset. Allowlists are narrow: (path + rule + commit) tuples, or one rule on the
+# two minified plugin bundles. Never a blanket vault path. Triaged 2026-10-05 from the full-history scan.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "false positive: my_ placeholder in prose describing the placeholder checker"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^1_projects/osnova/engineering/plans/m100\-v4\-builder\-lane\.md$''']
+commits = ["1435c4affb4ce111645a8cb0f68ffade02fa4bea", "8e7e9296cfdd80fd75e28212cc979f66c54da69c"]
+
+[[allowlists]]
+description = "false positive: SOPS age PUBLIC key"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^1_projects/osnova/vps\-self\-host\.md$''']
+commits = ["ba6b0208a253575d41cc0ea679d764497fcff272", "c4181adacbb22d80311ac2d4b4b556c2eb409998"]
+
+[[allowlists]]
+description = "false positive: prose, not a client id"
+condition = "AND"
+targetRules = ["linkedin-client-id"]
+paths = ['''^2_areas/career/portfolio/Portfolio\ Showcase\.md$''']
+commits = ["ba6b0208a253575d41cc0ea679d764497fcff272"]
+
+[[allowlists]]
+description = "REAL z.ai API key in a file since deleted; rotated by the founder on 2026-10-05"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^belle/z\.ai\ for\ claude\.md$''']
+commits = ["62d98c56a76f223b01477851d8833bdfc29a0007"]
+
+[[allowlists]]
+description = "false positive: minified library code (forge key helpers) in vendored Obsidian plugin bundles"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^\.obsidian/plugins/(mcp-tools|obsidian-local-rest-api)/main\.js$''']

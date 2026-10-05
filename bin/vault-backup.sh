@@ -2,13 +2,20 @@
 # Hourly vault backup: commit whatever LiveSync/agents changed and push to GitHub.
 # Git is backup/history only — sync between machines is handled by LiveSync + livesync-bridge.
 #
-# Before the push, gitleaks scans the unpushed range. FAIL CLOSED: a hit, a missing
-# binary or any other gitleaks error holds the push and sends a generic ntfy (never the
-# finding). Cron's PATH is minimal, so the mise-installed binary is called by full path.
+# Before the push, gitleaks scans exactly what the push sends: origin/main..main (all of
+# main with no upstream), whatever branch HEAD is on. FAIL CLOSED: a hit, a missing binary
+# or any other gitleaks error holds the push and sends a generic ntfy (never the finding).
+# Notes: gitleaks also exits 1 on a bad config, so "hit" below means "hit or config error";
+# fail-closed relies on the range being a valid ref (guarded by the rev-parse checks, a bad
+# range would make gitleaks error out, which is held too). The config lives OUTSIDE the
+# vault (an in-tree allowlist would be scanned content, editable by any agent) and inline
+# `gitleaks:allow` comments are ignored. The binary is the exact mise pin, not a glob or
+# `latest`: bump it here together with ~/.dotfiles/mise/config.toml.
 # Test hooks (env): VAULT_DIR, GITLEAKS_BIN, NTFY_CMD (receives the message as $1).
 set -euo pipefail
 VAULT_DIR=${VAULT_DIR:-/home/dima/vault}
-GITLEAKS_BIN=${GITLEAKS_BIN:-$(ls -d /home/dima/.local/share/mise/installs/aqua-gitleaks-gitleaks/*/gitleaks 2>/dev/null | sort -V | tail -1)}
+GITLEAKS_BIN=${GITLEAKS_BIN:-/home/dima/.local/share/mise/installs/aqua-gitleaks-gitleaks/8.30.1/gitleaks}
+GITLEAKS_CONFIG=/home/dima/.dotfiles/vault/gitleaks.toml
 cd "$VAULT_DIR"
 
 notify() {
@@ -25,25 +32,29 @@ if [ -n "$(git status --porcelain)" ]; then
     git commit -q -m "backup: vault snapshot $(date '+%Y-%m-%d %H:%M')"
 fi
 
-# Scan only what is about to leave the box; with no upstream ref, scan everything.
+# Scan what `git push origin main` sends; with no upstream ref that is all of main.
+if ! git rev-parse -q --verify refs/heads/main >/dev/null; then
+    notify "vault-backup: push held, no local main branch, check the vault-backup log"
+    exit 1
+fi
 if git rev-parse -q --verify refs/remotes/origin/main >/dev/null; then
-    range="origin/main..HEAD"
+    range="origin/main..main"
     ahead=$(git rev-list --count "$range")
 else
-    range="HEAD"; ahead=1
+    range="main"; ahead=1
 fi
 
 if [ "$ahead" -gt 0 ]; then
     rc=0
-    if [ -z "$GITLEAKS_BIN" ] || [ ! -x "$GITLEAKS_BIN" ]; then
+    if [ ! -x "$GITLEAKS_BIN" ] || [ ! -r "$GITLEAKS_CONFIG" ]; then
         rc=127
     else
         "$GITLEAKS_BIN" git --log-opts="$range" --redact --no-banner --exit-code 1 \
-            --config "$VAULT_DIR/.gitleaks.toml" . >/dev/null 2>&1 || rc=$?
+            --ignore-gitleaks-allow --config "$GITLEAKS_CONFIG" . >/dev/null 2>&1 || rc=$?
     fi
     if [ "$rc" -ne 0 ]; then
         if [ "$rc" -eq 1 ]; then
-            notify "vault-backup: push held, gitleaks hit, run gitleaks locally"
+            notify "vault-backup: push held, gitleaks hit or config error, run gitleaks locally"
         else
             notify "vault-backup: push held, gitleaks could not run (exit $rc), check the vault-backup log"
         fi
