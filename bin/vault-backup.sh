@@ -56,7 +56,7 @@ if [ "$ahead" -gt 0 ]; then
         OPTS=(--redact --no-banner --exit-code 1 --ignore-gitleaks-allow --config "$GITLEAKS_CONFIG")
         "$GITLEAKS_BIN" git --log-opts="$range" --max-archive-depth 4 "${OPTS[@]}" . >/dev/null 2>&1 || rc=$?
         if [ "$rc" -eq 0 ]; then
-            git log --format=%B "$range" | "$GITLEAKS_BIN" stdin "${OPTS[@]}" >/dev/null 2>&1 || rc=$?
+            git -c core.quotePath=false log --name-only --format=%B "$range" | "$GITLEAKS_BIN" stdin "${OPTS[@]}" >/dev/null 2>&1 || rc=$?
         fi
     fi
     if [ "$rc" -ne 0 ]; then
