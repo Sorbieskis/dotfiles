@@ -6,10 +6,12 @@
 # main with no upstream), whatever branch HEAD is on. FAIL CLOSED: a hit, a missing binary
 # or any other gitleaks error holds the push and sends a generic ntfy (never the finding).
 # Notes: gitleaks also exits 1 on a bad config, so "hit" below means "hit or config error";
-# fail-closed relies on the range being a valid ref (guarded by the rev-parse checks, a bad
-# range would make gitleaks error out, which is held too). The config lives OUTSIDE the
+# the range must stay a valid ref: a bad --log-opts range makes gitleaks exit 0 (scans
+# nothing), so only the rev-parse guards below keep this fail-closed. The config lives OUTSIDE the
 # vault (an in-tree allowlist would be scanned content, editable by any agent) and inline
-# `gitleaks:allow` comments are ignored. The binary is the exact mise pin, not a glob or
+# `gitleaks:allow` comments are ignored. An in-vault .gitleaksignore cannot be overridden
+# by --gitleaks-ignore-path, so its presence (work tree or main's tree) holds the push
+# (exit 126). Commit messages are scanned too (stdin), and archives to depth 4. The binary is the exact mise pin, not a glob or
 # `latest`: bump it here together with ~/.dotfiles/mise/config.toml.
 # Test hooks (env): VAULT_DIR, GITLEAKS_BIN, NTFY_CMD (receives the message as $1).
 set -euo pipefail
@@ -48,13 +50,20 @@ if [ "$ahead" -gt 0 ]; then
     rc=0
     if [ ! -x "$GITLEAKS_BIN" ] || [ ! -r "$GITLEAKS_CONFIG" ]; then
         rc=127
+    elif [ -e .gitleaksignore ] || [ -n "$(git ls-tree --name-only main -- .gitleaksignore)" ]; then
+        rc=126
     else
-        "$GITLEAKS_BIN" git --log-opts="$range" --redact --no-banner --exit-code 1 \
-            --ignore-gitleaks-allow --config "$GITLEAKS_CONFIG" . >/dev/null 2>&1 || rc=$?
+        OPTS=(--redact --no-banner --exit-code 1 --ignore-gitleaks-allow --config "$GITLEAKS_CONFIG")
+        "$GITLEAKS_BIN" git --log-opts="$range" --max-archive-depth 4 "${OPTS[@]}" . >/dev/null 2>&1 || rc=$?
+        if [ "$rc" -eq 0 ]; then
+            git log --format=%B "$range" | "$GITLEAKS_BIN" stdin "${OPTS[@]}" >/dev/null 2>&1 || rc=$?
+        fi
     fi
     if [ "$rc" -ne 0 ]; then
         if [ "$rc" -eq 1 ]; then
             notify "vault-backup: push held, gitleaks hit or config error, run gitleaks locally"
+        elif [ "$rc" -eq 126 ]; then
+            notify "vault-backup: push held, .gitleaksignore present in the vault, remove it"
         else
             notify "vault-backup: push held, gitleaks could not run (exit $rc), check the vault-backup log"
         fi
