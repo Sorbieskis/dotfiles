@@ -130,3 +130,9 @@ complete -c o -f -n '__fish_seen_subcommand_from wt' -a 'ls holders claim releas
 complete -c o -f -n '__fish_seen_subcommand_from mq' -a 'status land'
 complete -c o -f -n '__fish_seen_subcommand_from seat' -a 'routes build chores round evaluate shadow'
 complete -c o -f -n '__fish_seen_subcommand_from psi-watch' -a 'report sample watch'
+
+# A zellij server started from inside a Claude Code session inherits CLAUDE_CODE_CHILD_SESSION, and every
+# claude launched from its panes then runs with "Transcript saving is off". A human shell is never a child session.
+if status is-interactive
+    set -e CLAUDE_CODE_CHILD_SESSION
+end
