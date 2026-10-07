@@ -1,4 +1,7 @@
 {
+  "env": {
+    "CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP": "1"
+  },
   "permissions": {
     "deny": [
       "Bash(docker rm *)",
@@ -9,7 +12,10 @@
       "Bash(docker-compose down*)",
       "Bash(docker system prune*)",
       "Bash(dropdb *)",
-      "Bash(git push --force*)",
+      "Bash(git push --force *)",
+      "Bash(git push --force-with-lease* *master*)",
+      "Bash(git push --force-with-lease* *main*)",
+      "Bash(git push --force-if-includes*)",
       "Bash(git push -f *)",
       "Bash(git * --no-verify*)",
       "Write(/opt/stacks/**)",
@@ -47,31 +53,42 @@
     ],
     "defaultMode": "bypassPermissions"
   },
-  "env": {
-    "CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP": "1"
-  },
-  "model": "opus[1m]",
+  "model": "opus",
   "enabledPlugins": {
     "rust-analyzer-lsp@claude-plugins-official": false,
-    "build-loop@build-loop": true
+    "cc-plugin-you-should-know@builtin": true
   },
-  "extraKnownMarketplaces": {
-    "build-loop": {
-      "source": {
-        "source": "directory",
-        "path": "/home/dima/dev/build-loop"
-      }
-    }
-  },
+  "extraKnownMarketplaces": {},
   "effortLevel": "xhigh",
   "modelSettings": {
     "claude-fable-5-1": {
       "effortLevel": "xhigh"
+    },
+    "claude-opus-5-5": {
+      "effortLevel": "high"
+    },
+    "claude-sonnet-5-5": {
+      "effortLevel": "medium"
     }
   },
   "tui": "fullscreen",
   "skipDangerousModePermissionPrompt": true,
   "skipWorkflowUsageWarning": true,
   "theme": "dark",
-  "agentPushNotifEnabled": true
+  "switchModelsOnFlag": false,
+  "agentPushNotifEnabled": true,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.dotfiles/claude/hooks/no-self-match.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
 }
