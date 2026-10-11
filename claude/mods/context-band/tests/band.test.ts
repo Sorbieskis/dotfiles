@@ -7,24 +7,41 @@ function bottoms(on: any) {
   on('ui.render', ($: any, e: any) => (globalThis as any).h($.ui.resolve(e).Text, null, 'engine band'))
 }
 
-async function draw($: any, on: any, context: any): Promise<string | null> {
+async function drawHit($: any, context: any): Promise<any | null> {
   await $.session.measure({ context, rateLimits: [], changed: ['context'] })
   const ui = await $.ui.mount({ plugin: 'context-band', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
   const hit = await ui.find({ type: 'Text', text: /context|HAND|HARD/ })
   await ui.unmount()
+  return hit ?? null
+}
+
+async function draw($: any, on: any, context: any): Promise<string | null> {
+  const hit = await drawHit($, context)
   return hit ? (hit.text as string) : null
 }
 
-for (const [name, context, want] of [
-  ['under 150k', { tokens: 120000, window: 1000000, percent: 12 }, /^context 120k \/ 1000k \(12%\)$/],
-  ['at 150k', { tokens: 150000, window: 1000000, percent: 15 }, /resume ceiling/],
-  ['just under 190k', { tokens: 189999, window: 1000000, percent: 19 }, /resume ceiling/],
-  ['at 190k', { tokens: 190000, window: 1000000, percent: 19 }, /HAND OFF/],
-  ['over 300k', { tokens: 310000, window: 1000000, percent: 31 }, /HARD STOP/],
+// Styling is part of the contract: past 190k the band must be bold red inverse, 150k-189k yellow,
+// below that dim. Exact thresholds are tested on both sides (>= comparisons).
+const RED = { bold: true, inverse: true, color: 'red' }
+const YELLOW = { color: 'yellow' }
+const DIM = { dimColor: true }
+const W = 1000000
+
+for (const [name, tokens, want, props] of [
+  ['under 150k', 120000, /^context 120k \/ 1000k \(12%\)$/, DIM],
+  ['149999 is still dim', 149999, /^context 150k \/ 1000k/, DIM],
+  ['at 150k', 150000, /resume ceiling/, YELLOW],
+  ['just under 190k', 189999, /resume ceiling/, YELLOW],
+  ['at 190k', 190000, /HAND OFF/, RED],
+  ['299999 is HAND OFF, not HARD STOP', 299999, /HAND OFF/, RED],
+  ['exactly 300k', 300000, /HARD STOP/, RED],
+  ['over 300k', 310000, /HARD STOP/, RED],
 ] as const) {
   test(`band: ${name}`, async ($, on) => {
     bottoms(on)
-    expect(await draw($, on, context)).toMatch(want)
+    const hit = await drawHit($, { tokens, window: W, percent: Math.floor(tokens / 10000) })
+    expect(hit.text).toMatch(want)
+    expect(hit.props).toEqual(props)
   })
 }
 
