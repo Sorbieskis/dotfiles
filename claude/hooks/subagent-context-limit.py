@@ -20,6 +20,9 @@ LIMITS = {"haiku_soft": 100_000, "soft": 190_000, "hard": 300_000}
 # parse_bash + git_ok), and Write/Edit to a report/handoff/notes file under a work root.
 GIT_SOFT = {"add", "commit", "status", "diff", "log", "push"}
 GIT_HARD = {"add", "commit"}  # at the hard tier uncommitted work may still be saved
+PUSH_OPTS = {"-u", "--set-upstream", "--tags", "--follow-tags", "-q", "--quiet", "-v", "--verbose",
+             "--dry-run", "-n"}
+COMMIT_OPTS = {"-m", "-a", "-am", "--amend", "--no-edit", "-s", "-q", "--allow-empty", "-F", "--no-verify"}
 REPORT_BASENAME = re.compile(r"^(report|handoff|notes)[A-Za-z0-9_.-]*\.md$", re.I)
 HEREDOC = re.compile(r"\$\(\s*cat\s+<<-?\s*(['\"])(\w+)\1[ \t]*\n")
 
@@ -73,7 +76,8 @@ def parse_bash(cmd):
     """Split into segments of plain words, or None if anything exotic appears.
 
     Separators: unquoted && || ; | newline. Denied outright: lone &, unquoted/backtick/$(...)
-    substitution (except one quoted $(cat <<'EOF' ... EOF) heredoc), redirections, <( >(, ( ), ${.
+    substitution (except one quoted $(cat <<'EOF' ... EOF) heredoc), redirections, <( >(, ( ), ${,
+    unquoted $'...' and $"...".
     """
     segs, words, cur, have = [], [], [], False
 
@@ -142,8 +146,8 @@ def parse_bash(cmd):
             end_seg()
         elif c in "`<>()":
             return None
-        elif c == "$" and i + 1 < n and cmd[i + 1] in "({":
-            return None
+        elif c == "$" and i + 1 < n and cmd[i + 1] in "({'\"":
+            return None  # $(...), ${...}, and ANSI-C $'...' / locale $"..." (escapes can embed a newline)
         elif c == "#" and not have:
             return None
         else:
@@ -163,18 +167,23 @@ def git_ok(words, subs):
     if i >= len(words) or words[i] not in subs:
         return False
     sub, args = words[i], words[i + 1:]
+    if sub == "push":
+        # Allowlist, not denylist: git accepts abbreviations (--forc, --del, --mir), so any
+        # option outside PUSH_OPTS is denied, and `--` is denied too (a refspec after it would
+        # skip the +/: check).
+        for a in args:
+            if a.startswith("-") and a not in PUSH_OPTS:
+                return False
+            if a.startswith(("+", ":")):
+                return False  # forced / deleting refspec
+        return True
     for a in args:
         if a == "--":
             break
+        if sub == "commit" and a.startswith("-") and a not in COMMIT_OPTS:
+            return False
         if sub in ("log", "diff", "status") and (a.startswith("--output") or a in ("--ext-diff", "--textconv")):
             return False
-        if sub == "push":
-            if a.startswith("--force") or a in ("--delete", "--mirror", "--prune") or a.startswith(("--exec", "--receive-pack")):
-                return False
-            if a.startswith("+") or a.startswith(":"):
-                return False  # forced / deleting refspec
-            if re.match(r"^-[A-Za-z]*[fd]", a):
-                return False
     return True
 
 

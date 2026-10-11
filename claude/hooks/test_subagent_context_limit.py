@@ -133,6 +133,39 @@ class SubagentContextLimit(Fixture):
             with self.subTest(c=c):
                 self.bash(c, False)
 
+    def test_push_abbreviations_and_unknown_options_denied(self):
+        for c in ("git push --forc origin b", "git push --del origin b", "git push --mir", "git push --f",
+                  "git push -fu origin b", "git push -- +main", "git push origin :b", "git push --prune",
+                  "git push --force-if-includes", "git push --no-verify origin main",
+                  "git push -o ci.skip origin b"):
+            with self.subTest(c=c):
+                self.bash(c, False)
+
+    def test_push_allowlist_allowed(self):
+        for c in ("git push -u origin main", "git push --set-upstream origin b", "git push --tags",
+                  "git push --follow-tags -q", "git push --dry-run origin main", "git push -n origin HEAD:refs/heads/x"):
+            with self.subTest(c=c):
+                self.bash(c, True)
+
+    def test_commit_allowlist(self):
+        for c in ("git commit --amend --no-edit", "git commit -s -m x", "git commit -a -m x",
+                  "git commit --allow-empty -m x", "git commit -F msg.txt", "git commit -- a.rs"):
+            with self.subTest(c=c):
+                self.bash(c, True)
+        for c in ("git commit --fixup=abc", "git commit --allow-empty-message -m x", "git commit --cleanup=strip -m x",
+                  "git commit --am -m x"):
+            with self.subTest(c=c):
+                self.bash(c, False)
+
+    def test_ansi_c_and_locale_quotes_denied(self):
+        for c in ("git status $'x\ngit push --force'", "git commit -m $'a\nrm x'", "git log $\"x\"",
+                  "git status a$'b'", "git status $'\\n' rm"):
+            with self.subTest(c=c):
+                self.bash(c, False)
+
+    def test_dollar_quote_inside_double_quotes_allowed(self):
+        self.bash('git commit -m "cost $\'5\' and $\\"x\\""', True)
+
     def test_write_path_must_be_report_under_root(self):
         self.sub("A1", 200_000)
         for p, ok in (("/repo/report.md", True), ("/repo/docs/HANDOFF-m5.md", True), ("/repo/notes_x.md", True),
