@@ -1,0 +1,7 @@
+{
+  "name": "context-band",
+  "version": "0.1.0",
+  "description": "A band above the prompt showing the session's context size against the 150k/190k/300k hand-off thresholds",
+  "types": "./types/index.d.ts",
+  "author": { "name": "dima" }
+}
