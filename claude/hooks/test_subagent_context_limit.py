@@ -123,7 +123,7 @@ class SubagentContextLimit(Fixture):
                 self.bash(c, True)
 
     def test_bash_bypasses_denied(self):
-        for c in ("git status & rm -rf x", "git commit -m x $(rm x)", "git commit -m \"$(rm x)\"",
+        for c in ("git status & rm -rf x", "git status & git log", "git commit -m x $(rm x)", "git commit -m \"$(rm x)\"",
                   "git commit -m `rm x`", "git status > /etc/passwd", "git log >> f", "git status < f",
                   "git log --output=/tmp/x", "git diff --output /tmp/x", "git push --force", "git push -f",
                   "git push --force-with-lease", "git push --delete origin b", "git push origin +main",
