@@ -11,6 +11,8 @@ try:
     ev = json.load(sys.stdin)
 except Exception:
     sys.exit(0)
+if not isinstance(ev, dict) or not isinstance(ev.get("tool_input") or {}, dict):
+    sys.exit(0)
 if ev.get("tool_name") not in ("Agent", "Task"):
     sys.exit(0)
 ti = ev.get("tool_input") or {}
