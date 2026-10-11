@@ -88,6 +88,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.dotfiles/claude/hooks/model-on-spawn.py",
+            "timeout": 10
+          }
+        ]
       }
     ]
   }
