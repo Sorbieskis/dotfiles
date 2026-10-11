@@ -11,14 +11,18 @@ import json
 import os
 import re
 import sys
+import tempfile
 
 # Thresholds, in tokens. "haiku_soft" applies to Haiku-class subagents; "soft" to the rest.
 LIMITS = {"haiku_soft": 100_000, "soft": 190_000, "hard": 300_000}
 
-# Allowed over the soft limit: git housekeeping (every segment of a chained command must match),
-# and Write/Edit to a report, handoff or notes path.
-ALLOW_BASH = re.compile(r"^git\s+(add|commit|status|diff|log|push)(\s|$)")
-ALLOW_WRITE_PATH = re.compile(r"report|handoff|notes", re.I)
+# Allowed over the soft limit: git housekeeping (every segment of a chained command must pass
+# parse_bash + git_ok), and Write/Edit to a report/handoff/notes file under a work root.
+GIT_SOFT = {"add", "commit", "status", "diff", "log", "push"}
+GIT_HARD = {"add", "commit"}  # at the hard tier uncommitted work may still be saved
+REPORT_BASENAME = re.compile(r"^(report|handoff|notes)[A-Za-z0-9_.-]*\.md$", re.I)
+HEREDOC = re.compile(r"\$\(\s*cat\s+<<-?\s*(['\"])(\w+)\1[ \t]*\n")
+
 
 SOFT_REASON = ("Context {n} k exceeds the limit {m} k for this seat: commit what you have, "
                "write your report, and STOP. Do not start new work.")
@@ -65,14 +69,151 @@ def is_haiku(meta_path, agent_type):
     return any("haiku" in s.lower() for s in names)
 
 
+def parse_bash(cmd):
+    """Split into segments of plain words, or None if anything exotic appears.
+
+    Separators: unquoted && || ; | newline. Denied outright: lone &, unquoted/backtick/$(...)
+    substitution (except one quoted $(cat <<'EOF' ... EOF) heredoc), redirections, <( >(, ( ), ${.
+    """
+    segs, words, cur, have = [], [], [], False
+
+    def end_word():
+        nonlocal cur, have
+        if have:
+            words.append("".join(cur))
+        cur, have = [], False
+
+    def end_seg(blank_ok=False):
+        nonlocal words
+        end_word()
+        if words:
+            segs.append(words)
+        elif not blank_ok:
+            raise ValueError("empty segment")
+        words = []
+
+    i, n = 0, len(cmd)
+    while i < n:
+        c = cmd[i]
+        if c in " \t":
+            end_word()
+        elif c == "\n":
+            end_seg(blank_ok=True)
+        elif c == "\\":
+            if i + 1 >= n:
+                return None
+            cur.append(cmd[i + 1]); have = True; i += 1
+        elif c == "'":
+            j = cmd.find("'", i + 1)
+            if j < 0:
+                return None
+            cur.append(cmd[i + 1:j]); have = True; i = j
+        elif c == '"':
+            have = True
+            i += 1
+            while True:
+                if i >= n:
+                    return None
+                d = cmd[i]
+                if d == '"':
+                    break
+                if d == "\\" and i + 1 < n:
+                    cur.append(cmd[i + 1]); i += 2; continue
+                if d == "`":
+                    return None
+                if d == "$" and i + 1 < n and cmd[i + 1] in "({":
+                    m = HEREDOC.match(cmd, i)
+                    if not m:
+                        return None
+                    end = re.compile(r"^%s[ \t]*\n?[ \t]*\)" % re.escape(m.group(2)), re.M).search(cmd, m.end())
+                    if not end:
+                        return None
+                    cur.append("HEREDOC"); i = end.end(); continue
+                cur.append(d); i += 1
+        elif c == "&":
+            if cmd[i:i + 2] != "&&":
+                return None
+            end_seg(); i += 1
+        elif c == "|":
+            end_seg()
+            if cmd[i:i + 2] == "||":
+                i += 1
+        elif c == ";":
+            end_seg()
+        elif c in "`<>()":
+            return None
+        elif c == "$" and i + 1 < n and cmd[i + 1] in "({":
+            return None
+        elif c == "#" and not have:
+            return None
+        else:
+            cur.append(c); have = True
+        i += 1
+    end_seg(blank_ok=True)
+    return segs or None
+
+
+def git_ok(words, subs):
+    i = 1
+    while i < len(words) and words[i].startswith("-"):
+        if words[i] == "-C" and i + 1 < len(words):
+            i += 2
+        else:
+            return False  # -c, --exec-path, --git-dir, ...
+    if i >= len(words) or words[i] not in subs:
+        return False
+    sub, args = words[i], words[i + 1:]
+    for a in args:
+        if a == "--":
+            break
+        if sub in ("log", "diff", "status") and (a.startswith("--output") or a in ("--ext-diff", "--textconv")):
+            return False
+        if sub == "push":
+            if a.startswith("--force") or a in ("--delete", "--mirror", "--prune") or a.startswith(("--exec", "--receive-pack")):
+                return False
+            if a.startswith("+") or a.startswith(":"):
+                return False  # forced / deleting refspec
+            if re.match(r"^-[A-Za-z]*[fd]", a):
+                return False
+    return True
+
+
+def bash_allowed(cmd, subs):
+    try:
+        segs = parse_bash(str(cmd).rstrip("\n"))
+    except ValueError:
+        return False
+    if not segs:
+        return False
+    for w in segs:
+        if w[0] == "cd":
+            if len(w) != 2:
+                return False
+        elif w[0] != "git" or not git_ok(w, subs):
+            return False
+    return True
+
+
+def report_path_ok(path, cwd):
+    if not isinstance(path, str) or not path:
+        return False
+    home = os.path.expanduser("~")
+    if not os.path.isabs(path):
+        path = os.path.join(cwd or os.getcwd(), path)
+    path = os.path.normpath(path)
+    if not REPORT_BASENAME.match(os.path.basename(path)):
+        return False
+    roots = [cwd or os.getcwd(), os.path.join(home, "lab"), os.path.join(home, "drop"), tempfile.gettempdir(), "/tmp"]
+    return any(r and path.startswith(os.path.normpath(r).rstrip("/") + "/") for r in roots)
+
+
 def allowed_over_soft(ev):
     tool = ev.get("tool_name")
     ti = ev.get("tool_input") or {}
     if tool == "Bash":
-        segments = [s.strip() for s in re.split(r"&&|\|\||[;|\n]", str(ti.get("command", "")))]
-        return all(s and ALLOW_BASH.match(s) for s in segments)
+        return bash_allowed(ti.get("command", ""), GIT_SOFT)
     if tool in ("Write", "Edit"):
-        return bool(ALLOW_WRITE_PATH.search(str(ti.get("file_path", ""))))
+        return report_path_ok(ti.get("file_path"), ev.get("cwd"))
     return False
 
 
@@ -93,6 +234,9 @@ def decide(ev):
     if ctx is None:
         return None
     if ctx >= LIMITS["hard"]:
+        ti = ev.get("tool_input") or {}
+        if ev.get("tool_name") == "Bash" and bash_allowed(ti.get("command", ""), GIT_HARD):
+            return None
         return deny(HARD_REASON.format(n=ctx // 1000, m=LIMITS["hard"] // 1000))
     haiku = is_haiku(base + ".meta.json", ev.get("agent_type"))
     soft = LIMITS["haiku_soft"] if haiku else LIMITS["soft"]

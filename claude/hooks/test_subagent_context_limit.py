@@ -50,7 +50,8 @@ class Fixture(unittest.TestCase):
                       open(os.path.join(self.subdir, "agent-%s.meta.json" % aid), "w"))
 
     def event(self, tool="Bash", aid="A1", agent_type="general-purpose", **ti):
-        ev = {"session_id": "sess", "transcript_path": self.main, "tool_name": tool, "tool_input": ti}
+        ev = {"session_id": "sess", "transcript_path": self.main, "tool_name": tool, "tool_input": ti,
+              "cwd": "/repo"}
         if aid is not None:
             ev["agent_id"] = aid
             ev["agent_type"] = agent_type
@@ -94,11 +95,53 @@ class SubagentContextLimit(Fixture):
         self.assertAllowed(self.event("Edit", file_path="/repo/HANDOFF.md"))
         self.assertDenied(self.event("Write", file_path="/repo/src/a.rs", content="x"), SOFT.format(n=200, m=190))
 
-    def test_hard_limit_denies_git_commit(self):
+    def test_hard_limit_denies_all_but_git_save(self):
         self.sub("A1", 310_000)
-        self.assertDenied(self.event("Bash", command="git commit -m m"), HARD.format(n=310, m=300))
+        self.assertAllowed(self.event("Bash", command="git add -A && git commit -m m"))
+        self.assertDenied(self.event("Bash", command="git push"), HARD.format(n=310, m=300))
+        self.assertDenied(self.event("Bash", command="ls"), HARD.format(n=310, m=300))
+        self.assertDenied(self.event("Bash", command="git commit -m m >x"), HARD.format(n=310, m=300))
         self.assertDenied(self.event("Write", file_path="/tmp/x/report.md", content="r"),
                           HARD.format(n=310, m=300))
+
+    SOFT200 = SOFT.format(n=200, m=190)
+
+    def bash(self, cmd, ok):
+        self.sub("A1", 200_000)
+        ev = self.event("Bash", command=cmd)
+        if ok:
+            self.assertAllowed(ev)
+        else:
+            self.assertDenied(ev, self.SOFT200)
+
+    def test_quoted_and_cd_commits_allowed(self):
+        for c in ("cd d && git commit -m x", "git -C d commit -m x", "git commit -m 'a; b && c | d'",
+                  'git commit -m "fix: a || b"', "git commit -m x\n",
+                  "git commit -m \"$(cat <<'EOF'\nmsg; rm -rf / $(x)\nEOF\n)\"",
+                  "git add a\ngit commit -m x"):
+            with self.subTest(c=c):
+                self.bash(c, True)
+
+    def test_bash_bypasses_denied(self):
+        for c in ("git status & rm -rf x", "git commit -m x $(rm x)", "git commit -m \"$(rm x)\"",
+                  "git commit -m `rm x`", "git status > /etc/passwd", "git log >> f", "git status < f",
+                  "git log --output=/tmp/x", "git diff --output /tmp/x", "git push --force", "git push -f",
+                  "git push --force-with-lease", "git push --delete origin b", "git push origin +main",
+                  "git -c core.pager=x log", "git --exec-path=/x status", "git status <(ls)",
+                  "git status; (rm x)", "git commit -m \"$(cat <<EOF\nx\nEOF\n)\"",
+                  "git status && rm x", "cd a b && git status"):
+            with self.subTest(c=c):
+                self.bash(c, False)
+
+    def test_write_path_must_be_report_under_root(self):
+        self.sub("A1", 200_000)
+        for p, ok in (("/repo/report.md", True), ("/repo/docs/HANDOFF-m5.md", True), ("/repo/notes_x.md", True),
+                      ("/etc/cron.d/notes", False), ("/repo/src/report.rs", False), ("/repo/../etc/report.md", False),
+                      ("/home/dima/lab/2026-10-x/report.md", True), ("/var/www/report.md", False),
+                      ("report.md", True)):
+            with self.subTest(p=p):
+                ev = self.event("Write", file_path=os.path.expanduser(p), content="r")
+                self.assertAllowed(ev) if ok else self.assertDenied(ev, self.SOFT200)
 
     def test_no_agent_id_allows_main_session(self):
         # Main transcript and a file where a missing guard would read (agent-None) both carry 400k.
