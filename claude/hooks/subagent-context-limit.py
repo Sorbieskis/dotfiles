@@ -1,20 +1,33 @@
 #!/usr/bin/env python3
-"""PreToolUse (all tools): a SUBAGENT past its context limit commits, reports and stops.
+"""PreToolUse (all tools) + SubagentStop: watch every subagent's context; optionally stop it.
 
-Main-session calls (no agent_id) are allowed silently: the context-band mod covers them.
-A subagent's context is its own transcript's last assistant usage (input + cache read +
-cache create). Over the soft limit only the allowlist below runs; at the hard limit every
-tool is denied. Any error or unreadable input allows the call (fail open).
-Recipe and evidence: ~/lab/2026-10-loop-mods/part3-context-hook-probe.md.
+Two jobs, both keyed on a subagent's context = its own transcript's last assistant usage
+(input + cache read + cache create).
+1. NOTICE (always on): when a subagent first crosses a line (Haiku-class 100k and 190k, every
+   other model 150k and 190k) the crossing is recorded per spawning session in
+   ~/.cache/subagent-ctx/<session_id>.json; the next tool call of the SPAWNING session (no agent_id)
+   gets one additionalContext line per crossing, information only. SubagentStop retires the
+   agent's entry once its notices are delivered. `touch ~/.cache/subagent-ctx/DISABLE` turns the
+   whole hook off.
+2. ENFORCEMENT (off unless CLAUDE_SUBAGENT_LIMIT_ENFORCE=1): over the soft limit (190k, every
+   model; 100k is a target, never a stop: founder 2026-10-12) only the allowlist below runs; at the
+   hard limit (300k) every tool is denied.
+Any error or unreadable input allows the call (fail open).
+Recipe and evidence: ~/lab/2026-10-loop-mods/part3-context-hook-probe.md, part5-spawner-notice-probe.md.
 """
+import fcntl
 import json
 import os
 import re
 import sys
 import tempfile
 
-# Thresholds, in tokens. "haiku_soft" applies to Haiku-class subagents; "soft" to the rest.
-LIMITS = {"haiku_soft": 100_000, "soft": 190_000, "hard": 300_000}
+# Enforcement thresholds, in tokens (only with CLAUDE_SUBAGENT_LIMIT_ENFORCE=1).
+LIMITS = {"soft": 190_000, "hard": 300_000}
+# Notice lines, in tokens: informational only, per model class.
+NOTICE_LINES = {"haiku": (100_000, 190_000), "other": (150_000, 190_000)}
+ENFORCE_ENV = "CLAUDE_SUBAGENT_LIMIT_ENFORCE"
+STALE_SECS = 3 * 24 * 3600  # state files of dead sessions
 
 # Allowed over the soft limit: git housekeeping (every segment of a chained command must pass
 # parse_bash + git_ok), and Write/Edit to a report/handoff/notes file under a work root.
@@ -61,15 +74,125 @@ def context_tokens(path):
     return None
 
 
-def is_haiku(meta_path, agent_type):
-    names = [str(agent_type or "")]
+def agent_meta(meta_path):
+    """(description, model) from the subagent's .meta.json; empty strings if unreadable."""
     try:
         with open(meta_path, encoding="utf-8") as f:
             meta = json.load(f)
-        names += [str(meta.get("model") or ""), str(meta.get("agentType") or "")]
+        return str(meta.get("description") or ""), str(meta.get("model") or meta.get("agentType") or "")
     except Exception:
+        return "", ""
+
+
+def is_haiku(model, agent_type):
+    return "haiku" in ("%s %s" % (model, agent_type or "")).lower()
+
+
+def state_dir():
+    return os.environ.get("SUBAGENT_CTX_STATE_DIR") or os.path.join(
+        os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "subagent-ctx")
+
+
+def state_path(session_id):
+    if not isinstance(session_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", session_id):
+        return None
+    return os.path.join(state_dir(), session_id + ".json")
+
+
+class Locked:
+    """Read-modify-write of one session's state under flock (parallel subagents race)."""
+
+    def __init__(self, path):
+        self.path = path
+
+    def __enter__(self):
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        self.lock = open(self.path + ".lock", "w")
+        fcntl.flock(self.lock, fcntl.LOCK_EX)
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                self.state = json.load(f)
+            if not isinstance(self.state.get("agents"), dict):
+                self.state = {"agents": {}}
+        except Exception:
+            self.state = {"agents": {}}
+        return self.state
+
+    def __exit__(self, et, ev, tb):
+        try:
+            if et is None:
+                if self.state["agents"]:
+                    tmp = self.path + ".tmp%d" % os.getpid()
+                    with open(tmp, "w", encoding="utf-8") as f:
+                        json.dump(self.state, f)
+                    os.replace(tmp, self.path)
+                elif os.path.exists(self.path):
+                    os.unlink(self.path)
+        finally:
+            self.lock.close()
+        return False
+
+
+def label(desc, aid):
+    return (" ".join(desc.split())[:60] or aid)
+
+
+def record_crossings(ev, aid, ctx, base):
+    """Subagent call: note each newly crossed notice line as pending for the spawner."""
+    desc, model = agent_meta(base + ".meta.json")
+    kind = "haiku" if is_haiku(model, ev.get("agent_type")) else "other"
+    crossed = [l for l in NOTICE_LINES[kind] if ctx >= l]
+    sp = state_path(ev.get("session_id"))
+    if not crossed or not sp:
+        return
+    with Locked(sp) as st:
+        a = st["agents"].setdefault(aid, {"notified": [], "pending": []})
+        new = [l for l in crossed if l not in a["notified"]]
+        for l in new:
+            a["notified"].append(l)
+            a["pending"].append("subagent \"%s\" (%s) is at ~%dk context (crossed %dk)"
+                                % (label(desc, aid), model or ev.get("agent_type") or "?", ctx // 1000, l // 1000))
+
+
+def pending_notices(ev):
+    """Spawning-session call: deliver and clear pending lines; drop finished agents."""
+    sp = state_path(ev.get("session_id"))
+    if not sp or not os.path.exists(sp):
+        return None
+    lines = []
+    with Locked(sp) as st:
+        for aid in list(st["agents"]):
+            a = st["agents"][aid]
+            lines += a.get("pending") or []
+            a["pending"] = []
+            if a.get("finished"):
+                del st["agents"][aid]
+    if not lines:
+        return None
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "\n".join(lines)}}
+
+
+def finish(ev):
+    """SubagentStop: retire the agent once nothing is pending; sweep dead sessions' files."""
+    sp = state_path(ev.get("session_id"))
+    aid = ev.get("agent_id")
+    if sp and aid and os.path.exists(sp):
+        with Locked(sp) as st:
+            a = st["agents"].get(aid)
+            if a is not None:
+                if a.get("pending"):
+                    a["finished"] = True
+                else:
+                    del st["agents"][aid]
+    try:
+        import time
+        d = state_dir()
+        for n in os.listdir(d):
+            fp = os.path.join(d, n)
+            if time.time() - os.path.getmtime(fp) > STALE_SECS and n != "DISABLE":
+                os.unlink(fp)
+    except OSError:
         pass
-    return any("haiku" in s.lower() for s in names)
 
 
 def parse_bash(cmd):
@@ -234,7 +357,7 @@ def deny(reason):
 def decide(ev):
     aid = ev.get("agent_id")
     if not aid:
-        return None  # main session: the context-band mod covers it
+        return pending_notices(ev)  # main session: the context-band mod covers its own size
     tp = ev.get("transcript_path")
     if not isinstance(tp, str) or not tp.endswith(".jsonl"):
         return None
@@ -242,22 +365,28 @@ def decide(ev):
     ctx = context_tokens(base + ".jsonl")
     if ctx is None:
         return None
+    record_crossings(ev, aid, ctx, base)
+    if os.environ.get(ENFORCE_ENV) != "1":
+        return None
     if ctx >= LIMITS["hard"]:
         ti = ev.get("tool_input") or {}
         if ev.get("tool_name") == "Bash" and bash_allowed(ti.get("command", ""), GIT_HARD):
             return None
         return deny(HARD_REASON.format(n=ctx // 1000, m=LIMITS["hard"] // 1000))
-    haiku = is_haiku(base + ".meta.json", ev.get("agent_type"))
-    soft = LIMITS["haiku_soft"] if haiku else LIMITS["soft"]
-    if ctx < soft or allowed_over_soft(ev):
+    if ctx < LIMITS["soft"] or allowed_over_soft(ev):
         return None
-    return deny(SOFT_REASON.format(n=ctx // 1000, m=soft // 1000))
+    return deny(SOFT_REASON.format(n=ctx // 1000, m=LIMITS["soft"] // 1000))
 
 
 def main():
     try:
+        if os.path.exists(os.path.join(state_dir(), "DISABLE")):
+            return
         ev = json.load(sys.stdin)
         if not isinstance(ev, dict):
+            return
+        if ev.get("hook_event_name") == "SubagentStop":
+            finish(ev)
             return
         out = decide(ev)
     except Exception:

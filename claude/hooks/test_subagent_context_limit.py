@@ -15,8 +15,15 @@ SOFT = "Context {n} k exceeds the limit {m} k for this seat: commit what you hav
 HARD = "Context {n} k exceeds the hard limit {m} k for this seat: every tool is denied. Reply now with your report as your final message; do not retry."
 
 
-def run(stdin):
-    p = subprocess.run([sys.executable, "-I", HOOK], input=stdin, capture_output=True, text=True)
+STATE = {"dir": None}
+
+
+def run(stdin, enforce=True):
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_SUBAGENT_LIMIT_ENFORCE"}
+    env["SUBAGENT_CTX_STATE_DIR"] = STATE["dir"]
+    if enforce:
+        env["CLAUDE_SUBAGENT_LIMIT_ENFORCE"] = "1"
+    p = subprocess.run([sys.executable, "-I", HOOK], input=stdin, capture_output=True, text=True, env=env)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -32,6 +39,7 @@ def assistant(usage):
 class Fixture(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix="ctxlimit-")
+        STATE["dir"] = os.path.join(self.root, "state")
         self.main = os.path.join(self.root, "sess.jsonl")
         self.subdir = os.path.join(self.root, "sess", "subagents")
         os.makedirs(self.subdir)
@@ -40,13 +48,13 @@ class Fixture(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.root, ignore_errors=True)
 
-    def sub(self, aid, usage, boundary_after=False, model=None, agent_type="general-purpose"):
+    def sub(self, aid, usage, boundary_after=False, model=None, agent_type="general-purpose", desc=None):
         lines = [dump({"type": "attachment", "pad": "x" * 150_000}), assistant(usage)]
         if boundary_after:
             lines.append(dump({"type": "system", "subtype": "compact_boundary"}))
         open(os.path.join(self.subdir, "agent-%s.jsonl" % aid), "w").write("\n".join(lines) + "\n")
         if model:
-            json.dump({"agentType": agent_type, "model": model},
+            json.dump({"agentType": agent_type, "model": model, "description": desc or ""},
                       open(os.path.join(self.subdir, "agent-%s.meta.json" % aid), "w"))
 
     def event(self, tool="Bash", aid="A1", agent_type="general-purpose", **ti):
@@ -74,16 +82,23 @@ class SubagentContextLimit(Fixture):
         self.sub("A1", 150_000)
         self.assertAllowed(self.event("Bash", command="ls"))
 
-    def test_haiku_over_100k_denies_and_general_under_190k_allows(self):
+    def test_haiku_is_not_stopped_at_100k_but_shares_the_190k_line(self):
         self.sub("A1", 120_000, model="claude-haiku-5-5")
-        self.assertDenied(self.event("Bash", command="ls"), SOFT.format(n=120, m=100))
-        self.sub("A2", 120_000, model="inherit")  # same size, not Haiku: under the 190k soft limit
-        self.assertAllowed(self.event("Bash", aid="A2", command="ls"))
+        self.assertAllowed(self.event("Bash", command="ls"))
+        self.sub("A2", 200_000, model="claude-haiku-5-5")
+        self.assertDenied(self.event("Bash", aid="A2", command="ls"), SOFT.format(n=200, m=190))
 
-    def test_haiku_by_agent_type_denies(self):
+    def test_haiku_by_agent_type_not_stopped_at_120k(self):
         self.sub("A3", 120_000)
-        self.assertDenied(self.event("Bash", aid="A3", agent_type="haiku-scout", command="ls"),
-                          SOFT.format(n=120, m=100))
+        self.assertAllowed(self.event("Bash", aid="A3", agent_type="haiku-scout", command="ls"))
+
+    def test_enforcement_is_inert_without_the_env_var(self):
+        self.sub("A1", 200_000)
+        self.sub("A2", 310_000)
+        for aid in ("A1", "A2"):
+            rc, out, _ = run(self.event("Bash", aid=aid, command="ls"), enforce=False)
+            self.assertEqual((rc, out), (0, ""))
+        self.assertDenied(self.event("Bash", command="ls"), SOFT.format(n=200, m=190))  # control: on = denies
 
     def test_soft_limit_allowlist(self):
         self.sub("A1", 200_000)
@@ -193,6 +208,77 @@ class SubagentContextLimit(Fixture):
     def test_garbage_stdin_exits_zero(self):
         for raw in ("not json{", "[]", "", '{"tool_input": "x", "agent_id": "A1", "transcript_path": 3}'):
             self.assertAllowed(raw)
+
+
+class SpawnerNotice(Fixture):
+    def main_call(self):
+        return run(self.event("Bash", aid=None, command="ls"), enforce=False)
+
+    def notice_lines(self, out):
+        if not out:
+            return []
+        d = json.loads(out)["hookSpecificOutput"]
+        self.assertEqual(d["hookEventName"], "PreToolUse")
+        return d["additionalContext"].split("\n")
+
+    def test_crossing_notifies_once_then_silent(self):
+        self.sub("A1", 104_000, model="claude-haiku-5-5", desc="build the thing")
+        rc, out, _ = run(self.event("Bash", command="ls"), enforce=False)  # the subagent's own call
+        self.assertEqual((rc, out), (0, ""))  # a subagent is told nothing
+        rc, out, _ = self.main_call()
+        self.assertEqual(self.notice_lines(out),
+                         ['subagent "build the thing" (claude-haiku-5-5) is at ~104k context (crossed 100k)'])
+        self.assertEqual(self.main_call()[1], "")  # never repeated
+        run(self.event("Bash", command="ls"), enforce=False)  # the subagent calls again at the same size
+        self.assertEqual(self.main_call()[1], "")
+
+    def test_second_line_is_a_second_notice(self):
+        self.sub("A1", 104_000, model="haiku", desc="d")
+        run(self.event("Bash", command="ls"), enforce=False)
+        self.main_call()
+        self.sub("A1", 195_000, model="haiku", desc="d")
+        run(self.event("Bash", command="ls"), enforce=False)
+        lines = self.notice_lines(self.main_call()[1])
+        self.assertEqual(len(lines), 1)
+        self.assertIn("crossed 190k", lines[0])
+
+    def test_non_haiku_first_line_is_150k(self):
+        self.sub("A1", 120_000, model="inherit")
+        run(self.event("Bash", command="ls"), enforce=False)
+        self.assertEqual(self.main_call()[1], "")
+        self.sub("A1", 155_000, model="inherit")
+        run(self.event("Bash", command="ls"), enforce=False)
+        self.assertIn("crossed 150k", self.main_call()[1])
+
+    def test_main_call_with_nothing_pending_is_silent(self):
+        self.assertEqual(self.main_call()[1:], ("", ""))
+        self.sub("A1", 50_000, model="haiku")
+        run(self.event("Bash", command="ls"), enforce=False)
+        self.assertEqual(self.main_call()[1], "")
+
+    def test_notice_goes_to_the_spawning_session_only(self):
+        self.sub("A1", 104_000, model="haiku")
+        run(self.event("Bash", command="ls"), enforce=False)
+        other = json.loads(self.event("Bash", aid=None, command="ls"))
+        other["session_id"] = "other"
+        self.assertEqual(run(json.dumps(other), enforce=False)[1], "")
+        self.assertIn("crossed 100k", self.main_call()[1])
+
+    def test_finished_agent_is_cleaned_up(self):
+        self.sub("A1", 104_000, model="haiku")
+        run(self.event("Bash", command="ls"), enforce=False)
+        stop = json.dumps({"hook_event_name": "SubagentStop", "session_id": "sess", "agent_id": "A1"})
+        run(stop, enforce=False)  # stops with its notice undelivered: kept, flagged finished
+        self.assertIn("crossed 100k", self.main_call()[1])
+        self.assertEqual(os.listdir(STATE["dir"]) and [n for n in os.listdir(STATE["dir"]) if n.endswith(".json")], [])
+        self.assertEqual(self.main_call()[1], "")
+
+    def test_disable_file_turns_it_off(self):
+        self.sub("A1", 104_000, model="haiku")
+        os.makedirs(STATE["dir"], exist_ok=True)
+        open(os.path.join(STATE["dir"], "DISABLE"), "w").close()
+        run(self.event("Bash", command="ls"), enforce=False)
+        self.assertEqual(self.main_call()[1], "")
 
 
 if __name__ == "__main__":
