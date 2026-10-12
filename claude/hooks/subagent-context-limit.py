@@ -106,7 +106,7 @@ class Locked:
         self.path = path
 
     def __enter__(self):
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
         self.lock = open(self.path + ".lock", "w")
         fcntl.flock(self.lock, fcntl.LOCK_EX)
         try:
@@ -116,11 +116,12 @@ class Locked:
                 self.state = {"agents": {}}
         except Exception:
             self.state = {"agents": {}}
+        self.orig = json.dumps(self.state)
         return self.state
 
     def __exit__(self, et, ev, tb):
         try:
-            if et is None:
+            if et is None and json.dumps(self.state) != self.orig:  # unchanged: no rewrite
                 if self.state["agents"]:
                     tmp = self.path + ".tmp%d" % os.getpid()
                     with open(tmp, "w", encoding="utf-8") as f:
@@ -191,6 +192,11 @@ def finish(ev):
             fp = os.path.join(d, n)
             if time.time() - os.path.getmtime(fp) > STALE_SECS and n != "DISABLE":
                 os.unlink(fp)
+                if n.endswith(".json"):
+                    try:
+                        os.unlink(fp + ".lock")
+                    except OSError:
+                        pass
     except OSError:
         pass
 

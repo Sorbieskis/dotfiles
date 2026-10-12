@@ -273,6 +273,56 @@ class SpawnerNotice(Fixture):
         self.assertEqual(os.listdir(STATE["dir"]) and [n for n in os.listdir(STATE["dir"]) if n.endswith(".json")], [])
         self.assertEqual(self.main_call()[1], "")
 
+    def state_agents(self):
+        return sorted(json.load(open(os.path.join(STATE["dir"], "sess.json")))["agents"])
+
+    def test_finished_agent_with_nothing_pending_is_retired_from_state(self):
+        self.sub("A1", 104_000, model="haiku")
+        self.sub("A2", 104_000, model="haiku")
+        run(self.event("Bash", aid="A1", command="ls"), enforce=False)
+        self.main_call()  # delivers A1's notice: nothing pending
+        run(self.event("Bash", aid="A2", command="ls"), enforce=False)  # keeps the state file alive
+        self.assertEqual(self.state_agents(), ["A1", "A2"])
+        run(json.dumps({"hook_event_name": "SubagentStop", "session_id": "sess", "agent_id": "A1"}), enforce=False)
+        self.assertEqual(self.state_agents(), ["A2"])
+
+    def test_main_call_with_nothing_pending_does_not_rewrite_state(self):
+        self.sub("A1", 104_000, model="haiku")
+        run(self.event("Bash", command="ls"), enforce=False)
+        self.main_call()
+        f = os.path.join(STATE["dir"], "sess.json")
+        os.utime(f, (1, 1))
+        self.main_call()
+        self.assertEqual(os.path.getmtime(f), 1)
+
+    def test_state_dir_is_private(self):
+        self.sub("A1", 104_000, model="haiku")
+        run(self.event("Bash", command="ls"), enforce=False)
+        self.assertEqual(os.stat(STATE["dir"]).st_mode & 0o777, 0o700)
+
+    def test_stale_sweep_removes_the_lock_with_its_state(self):
+        os.makedirs(STATE["dir"])
+        for n in ("old.json", "old.json.lock"):
+            f = os.path.join(STATE["dir"], n)
+            open(f, "w").write("{}")
+            os.utime(f, (1, 1))
+        run(json.dumps({"hook_event_name": "SubagentStop", "session_id": "sess", "agent_id": "A9"}), enforce=False)
+        self.assertEqual(os.listdir(STATE["dir"]), [])
+
+    def test_two_subagents_crossing_together_both_notify(self):
+        self.sub("A1", 104_000, model="haiku", desc="one")
+        self.sub("A2", 106_000, model="haiku", desc="two")
+        ps = [subprocess.Popen([sys.executable, "-I", HOOK], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               text=True, env={**os.environ, "SUBAGENT_CTX_STATE_DIR": STATE["dir"]})
+              for _ in range(2)]
+        for p, a in zip(ps, ("A1", "A2")):
+            p.stdin.write(self.event("Bash", aid=a, command="ls")); p.stdin.close()
+        for p in ps:
+            p.wait(); p.stdout.close()
+        text = "\n".join(self.notice_lines(self.main_call()[1]))
+        self.assertIn('"one"', text)
+        self.assertIn('"two"', text)
+
     def test_disable_file_turns_it_off(self):
         self.sub("A1", 104_000, model="haiku")
         os.makedirs(STATE["dir"], exist_ok=True)
