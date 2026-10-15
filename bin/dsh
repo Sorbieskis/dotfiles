@@ -115,7 +115,8 @@ fi
 
 # ⚠ THE CATALOGUE IS THE WHITELIST: a model pi-ai's installed openai-codex catalogue does not
 # carry answers UNKNOWN_MODEL before any network call. gpt-6-luna/-sol first ship in pi-ai 0.87.1 and gpt-6.1-sol in
-# pi-ai 0.99 (per id: only the missing ones are spelled out), and even dsh 0.1.7-rc.1's dsh-llm-pi-ai pins `^0.85.1` (= <0.86), so no dsh upgrade
+# pi-ai 0.99.1 (per id: only the missing ones are spelled out; from 0.99.0 the catalogue keys are
+# `chat:<id>`, so the id is read from each entry's `id` field), and even dsh 0.1.7-rc.1's dsh-llm-pi-ai pins `^0.85.1` (= <0.86), so no dsh upgrade
 # reaches them (checked 2026-09-23). A `models` list REPLACES the served catalogue, so it
 # must re-list every installed id (an `{id}` entry inherits its catalogue fields) plus the
 # missing ones spelled out. Fields copied from pi-ai 0.87.1's catalogue. Declared on EVERY
@@ -126,7 +127,8 @@ declare_models=""
 if [ -r "$CATALOG" ]; then
   declare_models=$(python3 - "$CATALOG" <<'PY'
 import json, sys
-ids = sorted({m for v in json.load(open(sys.argv[1])).values() for m in v})
+ids = sorted({(e.get("id") if isinstance(e, dict) and e.get("id") else k)
+               for v in json.load(open(sys.argv[1])).values() for k, e in v.items()})
 extra = [m for m in ("gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol") if m not in ids]
 if not extra:
     sys.exit(0)
