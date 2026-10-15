@@ -45,8 +45,8 @@ usage() {
 usage: dsh [route] [-- dsh args...]
 
   route    luna (default) · sol · terra · astra · luna6 · sol6 · sol61 · v4 · v4-pro,
-           or a bare deepseek-* model id. GPT-6: sol61 only; luna6/sol6/astra are GPT-6.0
-           and are not to be used (founder 2026-10-15).
+           or a bare deepseek-* model id. Use sol61 (gpt-6.1-sol) rather than sol6
+           (gpt-6-sol); luna6 and astra are unaffected (founder 2026-10-15).
            Resolved through osnova-product's \`bin/lane resolve-route\` when that checkout
            has it, so the route words cannot drift from the lane's own list.
 
