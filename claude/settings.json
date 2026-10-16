@@ -54,29 +54,7 @@
     "defaultMode": "bypassPermissions"
   },
   "model": "opus",
-  "enabledPlugins": {
-    "rust-analyzer-lsp@claude-plugins-official": false,
-    "cc-plugin-you-should-know@builtin": true
-  },
-  "extraKnownMarketplaces": {},
-  "effortLevel": "xhigh",
-  "modelSettings": {
-    "claude-fable-5-1": {
-      "effortLevel": "xhigh"
-    },
-    "claude-opus-5-5": {
-      "effortLevel": "high"
-    },
-    "claude-sonnet-5-5": {
-      "effortLevel": "medium"
-    }
-  },
-  "tui": "fullscreen",
-  "skipDangerousModePermissionPrompt": true,
-  "skipWorkflowUsageWarning": true,
-  "theme": "dark",
-  "switchModelsOnFlag": false,
-  "agentPushNotifEnabled": true,
+  "cleanupPeriodDays": 3650,
   "hooks": {
     "PreToolUse": [
       {
@@ -85,6 +63,11 @@
           {
             "type": "command",
             "command": "python3 ~/.dotfiles/claude/hooks/no-self-match.py",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.dotfiles/claude/hooks/zellij-no-new-tab.py",
             "timeout": 10
           }
         ]
@@ -105,10 +88,44 @@
           {
             "type": "command",
             "command": "python3 ~/.dotfiles/claude/hooks/subagent-context-limit.py",
-            "timeout": 10
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.dotfiles/claude/hooks/subagent-context-limit.py",
+            "timeout": 5
           }
         ]
       }
     ]
-  }
+  },
+  "enabledPlugins": {
+    "rust-analyzer-lsp@claude-plugins-official": false,
+    "cc-plugin-you-should-know@builtin": true
+  },
+  "extraKnownMarketplaces": {},
+  "effortLevel": "xhigh",
+  "modelSettings": {
+    "claude-fable-5-1": {
+      "effortLevel": "xhigh"
+    },
+    "claude-opus-5-5": {
+      "effortLevel": "high"
+    },
+    "claude-sonnet-5-5": {
+      "effortLevel": "high"
+    }
+  },
+  "tui": "fullscreen",
+  "skipDangerousModePermissionPrompt": true,
+  "skipWorkflowUsageWarning": true,
+  "theme": "dark",
+  "switchModelsOnFlag": false,
+  "agentPushNotifEnabled": true
 }
