@@ -23,6 +23,8 @@ ln -sf  "$D/zellij/layouts/main.kdl" ~/.config/zellij/layouts/main.kdl
 ln -sf  "$D/claude/CLAUDE.md"        ~/.claude/CLAUDE.md
 ln -sf  "$D/claude/settings.json"    ~/.claude/settings.json
 ln -sfn "$D/claude/skills"           ~/.claude/skills
+# Private skills (company strategy, people) live in the vault, never in this PUBLIC repo; link any present.
+for s in ~/vault/.claude/skills/*/; do [ -d "$s" ] && ln -sfn "${s%/}" "$D/claude/skills/$(basename "$s")"; done
 
 echo "==> scripts and user units"
 for b in "$D"/bin/*; do [ -f "$b" ] || continue; chmod +x "$b"; ln -sf "$b" ~/.local/bin/"$(basename "$b")"; done

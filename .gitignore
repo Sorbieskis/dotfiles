@@ -3,3 +3,6 @@ __pycache__/
 
 # Claude Code writes its synced built-in skills here (state, not config)
 claude/skills/synced/
+# Private skills: symlinks into ~/vault/.claude/skills (this repo is PUBLIC)
+claude/skills/counsel
+claude/skills/strategy
