@@ -5,14 +5,16 @@ After=default.target
 [Service]
 Type=oneshot
 # RemainAfterExit keeps this unit and its cgroup alive for as long as the session lives: the
-# zellij server the boot script spawns stays inside it, so MemoryMax caps every pane — Claude
+# zellij server the boot script spawns stays inside it (and so inside zellij.slice's cap) — Claude
 # Code, cargo, node — as one group and a runaway build can never evict the production stacks.
 # (Without RemainAfterExit systemd tears the cgroup down the moment the script exits and kills
 # the session with it — that is why the live copy on osnova-vps had drifted to this setting.)
 # Consequence: zellij-main.timer only heals a session whose unit is inactive; a dead session
 # with a live unit needs `systemctl --user restart zellij-main`.
 RemainAfterExit=yes
-MemoryMax=20G
+# The cap lives on zellij.slice (2026-10-15), shared with every other zellij session, so the box has
+# ONE zellij budget (zellij.slice) instead of one per session.
+Slice=zellij.slice
 ExecStart=%h/.local/bin/zellij-main-boot.sh
 # KillMode=process: `systemctl --user stop/disable --now` must NOT tear down a session you are
 # using — only the (already finished) boot script counts as the main process.

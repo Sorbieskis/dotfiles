@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+
+# Claude Code writes its synced built-in skills here (state, not config)
+claude/skills/synced/

@@ -1,0 +1,6 @@
+{
+  "name": "redact-secrets",
+  "version": "0.1.0",
+  "description": "Redacts API keys, tokens and private keys from tool results before Claude reads them",
+  "author": { "name": "dima" }
+}

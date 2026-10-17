@@ -131,6 +131,18 @@ complete -c o -f -n '__fish_seen_subcommand_from mq' -a 'status land'
 complete -c o -f -n '__fish_seen_subcommand_from seat' -a 'routes build chores round evaluate shadow'
 complete -c o -f -n '__fish_seen_subcommand_from psi-watch' -a 'report sample watch'
 
+# Run zellij inside the capped zellij.slice (systemd/user/zellij.slice), so a session started from an SSH login
+# shares the 20 GB cap instead of landing uncapped in the login's scope. Commands that never start a server pass
+# straight through, as does anything run from inside zellij (its panes are already in the slice).
+function zellij --wraps zellij --description 'zellij, started inside the capped zellij.slice'
+    if set -q ZELLIJ; or contains -- "$argv[1]" action list-sessions ls kill-session k kill-all-sessions delete-session d \
+            delete-all-sessions setup -h --help -V --version; or not systemctl --user -q is-active default.target 2>/dev/null
+        command zellij $argv
+        return
+    end
+    systemd-run --user --scope --slice=zellij.slice --quiet --collect -- (command -s zellij) $argv
+end
+
 # A zellij server started from inside a Claude Code session inherits CLAUDE_CODE_CHILD_SESSION, and every
 # claude launched from its panes then runs with "Transcript saving is off". A human shell is never a child session.
 if status is-interactive

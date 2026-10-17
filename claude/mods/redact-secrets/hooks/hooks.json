@@ -1,0 +1,4 @@
+{
+  "description": "redact-secrets hooks module",
+  "modules": ["./register.js"]
+}

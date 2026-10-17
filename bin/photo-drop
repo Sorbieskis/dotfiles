@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drop photos from the phone onto the box, for Claude Code to look at.
+"""Drop photos (or any file) from the phone onto the box, for Claude Code.
 
 A terminal SSH session (Termius on the phone) cannot accept an image, so this
 serves an upload page on the TAILSCALE IP — private to the tailnet, never
@@ -18,8 +18,14 @@ of being retyped one-handed at a shell prompt.
 
   ~/drop/0007/note.md        what you typed (absent if you typed nothing)
   ~/drop/0007/1-IMG_x.jpg    photos, numbered in the order you picked them
+  ~/drop/0007/2-site.zip     other files, from the second ("files") picker
   ~/drop/latest              symlink -> the newest batch directory
   ~/drop/index.tsv           append-only: batch, ISO time, files, bytes
+
+The "files" picker takes any type — a zip, a PDF, a log — because the phone's
+photo picker (`accept="image/*"`) cannot reach them. The server never cared:
+it stores bytes whatever they are. Non-images show as a named tile instead of a
+thumbnail and are only ever served as an inert download (see /f/).
 
 Uploads are raw PUT bodies, not multipart form data: Python 3.13 removed the
 `cgi` module, which was the stdlib's only multipart parser. The page's JS reads
@@ -34,7 +40,6 @@ import argparse
 import datetime
 import html
 import http.server
-import json
 import mimetypes
 import os
 import pathlib
@@ -58,7 +63,7 @@ TOKEN_CAP = 64
 MAX_BYTES = 64 * 1024 * 1024
 MAX_NOTE = 8000
 SHOWN = 8  # batches rendered on the page
-# Raster types served inline; everything else (svg, html, …) → octet-stream.
+# Raster types served inline; everything else (svg, html, zip, …) → octet-stream.
 IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp",
                "image/bmp", "image/tiff", "image/heic", "image/heif",
                "image/avif"}
@@ -76,7 +81,8 @@ PAGE = """<!doctype html>
   h1 { font-size:1rem; margin:0; color:#7fd3e0; letter-spacing:.04em;
        text-transform:uppercase; font-weight:600; }
   .dest { font:12px ui-monospace,monospace; color:#8b98a5; }
-  label.pick { display:block; padding:2rem 1rem; text-align:center; cursor:pointer;
+  .picks { display:flex; gap:.5rem; }
+  label.pick { flex:1; display:block; padding:2rem 1rem; text-align:center; cursor:pointer;
          border:1px dashed #3a4753; background:#161c22; font-weight:500; }
   label.pick:active { background:#1b232b; border-color:#7fd3e0; }
   label.pick span { color:#7fd3e0; }
@@ -110,6 +116,12 @@ PAGE = """<!doctype html>
            gap:.4rem; }
   .shots img { width:100%; aspect-ratio:1; object-fit:cover; display:block;
                background:#161c22; border:1px solid #232c35; }
+  .shots a.file { aspect-ratio:1; display:flex; flex-direction:column;
+                  justify-content:center; padding:.4rem; overflow:hidden;
+                  background:#161c22; border:1px solid #232c35; color:#7fd3e0;
+                  font:11px/1.3 ui-monospace,monospace; text-decoration:none;
+                  word-break:break-all; }
+  .shots a.file small { color:#5c6875; margin-top:.3rem; }
   .empty { color:#5c6875; font:13px ui-monospace,monospace; }
 </style>
 <header>
@@ -117,10 +129,16 @@ PAGE = """<!doctype html>
   <div class="dest">__DEST__</div>
 </header>
 
-<label class="pick">
-  <input type="file" accept="image/*" multiple onchange="send(this.files)">
-  tap to pick <span>photos</span>
-</label>
+<div class="picks">
+  <label class="pick">
+    <input type="file" accept="image/*" multiple onchange="send(this.files)">
+    tap to pick <span>photos</span>
+  </label>
+  <label class="pick">
+    <input type="file" multiple onchange="send(this.files)">
+    or any <span>files</span>
+  </label>
+</div>
 <div id="log"></div>
 
 <div id="notebox">
@@ -188,20 +206,11 @@ async function saveNote() {
 }
 
 async function refresh() {
+  // The server renders the list (render()), so a tile is defined in one place
+  // rather than once in Python for the first paint and again here in JS.
   try {
-    const r = await fetch('/api/list');
-    const b = await r.json();
-    document.getElementById('grid').innerHTML = b.map(x =>
-      '<div class="batch"><div class="bhead"><b>' + x.batch + '</b>' +
-      '<span class="meta">' + x.files.length + ' shot' +
-      (x.files.length === 1 ? '' : 's') + ' \\u00b7 ' + x.when + '</span>' +
-      '<button class="del" data-b="' + x.batch + '" onclick="delBatch(this)">\\u2715</button>' +
-      '</div>' +
-      (x.note ? '<div class="bnote">' + esc(x.note) + '</div>' : '') +
-      '<div class="shots">' + x.files.map(f =>
-        '<img loading="lazy" src="/f/' + x.batch + '/' + encodeURIComponent(f) + '">'
-      ).join('') + '</div></div>'
-    ).join('') || '<div class="empty">nothing yet</div>';
+    const r = await fetch('/recent');
+    if (r.ok) document.getElementById('grid').innerHTML = await r.text();
   } catch (e) { /* page still works without the refresh */ }
 }
 async function delBatch(el) {
@@ -213,9 +222,6 @@ async function delBatch(el) {
     const r = await fetch('/b/' + n, { method: 'DELETE' });
     if (r.ok) refresh(); else alert('delete failed: ' + (await r.text()));
   } catch (e) { alert('delete failed: ' + e); }
-}
-function esc(s) {
-  return s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 }
 </script>
 """
@@ -349,8 +355,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     .replace("__RECENT__", render(batches())))
             return self._reply(200, page, "text/html; charset=utf-8")
 
-        if self.path == "/api/list":
-            return self._reply(200, json.dumps(batches()), "application/json")
+        if self.path == "/recent":
+            return self._reply(200, render(batches()), "text/html; charset=utf-8")
 
         if self.path.startswith("/f/"):
             parts = self.path[3:].split("/")
@@ -473,20 +479,42 @@ def delete_batch(name):
     return True, f"{name} deleted"
 
 
+def is_image(name):
+    return mimetypes.guess_type(name)[0] in IMAGE_TYPES
+
+
+def size(n):
+    return f"{n / 1e6:.1f} MB" if n >= 1e6 else f"{max(1, n // 1000)} KB"
+
+
+def tile(batch, name):
+    """A thumbnail for an image, a named download tile for anything else.
+
+    Names went through safe() on upload, so they need no URL-encoding here.
+    """
+    src = f"/f/{html.escape(batch)}/{html.escape(name)}"
+    if is_image(name):
+        return f'<img loading="lazy" src="{src}">'
+    n = (DEST / batch / name).stat().st_size
+    return (f'<a class="file" href="{src}" download>{html.escape(name)}'
+            f'<small>{size(n)}</small></a>')
+
+
 def render(items):
     if not items:
         return '<div class="empty">nothing yet</div>'
     out = []
     for b in items:
-        shots = "".join(
-            f'<img loading="lazy" src="/f/{html.escape(b["batch"])}/{html.escape(f)}">'
-            for f in b["files"])
+        shots = "".join(tile(b["batch"], f) for f in b["files"])
         note = (f'<div class="bnote">{html.escape(b["note"])}</div>'
                 if b["note"] else "")
-        plural = "" if len(b["files"]) == 1 else "s"
+        imgs = sum(map(is_image, b["files"]))
+        other = len(b["files"]) - imgs
+        meta = ([f"{imgs} shot{'' if imgs == 1 else 's'}"] if imgs else []) + \
+               ([f"{other} file{'' if other == 1 else 's'}"] if other else [])
         out.append(
             f'<div class="batch"><div class="bhead"><b>{html.escape(b["batch"])}</b>'
-            f'<span class="meta">{len(b["files"])} shot{plural} · {b["when"]}</span>'
+            f'<span class="meta">{" · ".join(meta + [b["when"]])}</span>'
             f'<button class="del" data-b="{html.escape(b["batch"])}" '
             f'onclick="delBatch(this)">✕</button></div>'
             f'{note}<div class="shots">{shots}</div></div>')

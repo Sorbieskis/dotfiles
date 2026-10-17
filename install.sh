@@ -57,12 +57,13 @@ if [ -n "$fish" ] && [ "$(getent passwd "$USER" | cut -d: -f7)" != "$fish" ]; th
 echo "==> user services (start at boot only with linger: sudo loginctl enable-linger $USER)"
 if command -v systemctl >/dev/null 2>&1; then
     systemctl --user daemon-reload
-    systemctl --user enable --now photo-drop.service model-view.service zellij-main.service zellij-main.timer || true
+    systemctl --user enable --now photo-drop.service model-view.service site-preview.service zellij-main.service zellij-main.timer || true
 fi
 
 echo "==> crontab: hourly vault push"
-( crontab -l 2>/dev/null | grep -v 'vault-backup.sh' || true
-  echo "17 * * * * $HOME/.local/bin/vault-backup.sh >> $HOME/.vault-backup.log 2>&1" ) | crontab -
+( crontab -l 2>/dev/null | grep -v -e 'vault-backup.sh' -e 'mods-check' || true
+  echo "17 * * * * $HOME/.local/bin/vault-backup.sh >> $HOME/.vault-backup.log 2>&1"
+  echo "7 9 * * * $HOME/.local/bin/mods-check >> $HOME/.mods-check.log 2>&1" ) | crontab -
 
 command -v tldr >/dev/null 2>&1 && tldr --update >/dev/null 2>&1 || true
 echo "done: mise $(~/.local/bin/mise --version 2>/dev/null) · $(fish --version 2>/dev/null || echo 'fish missing') · linger=$(loginctl show-user "$USER" -p Linger --value 2>/dev/null || echo '?')"

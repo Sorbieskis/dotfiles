@@ -1,6 +1,6 @@
 ---
 name: photos
-description: Pick up photos the founder just dropped from their phone via photo-drop (~/drop) and act on them. Use when they say they uploaded/dropped/sent a picture or screenshot, or invoke /photos directly. Reads the batch note first — the note is usually the actual instruction — then the images, then does the work it asks for.
+description: Pick up photos or files the founder just dropped from their phone via photo-drop (~/drop) and act on them. Use when they say they uploaded/dropped/sent a picture, screenshot, zip, PDF or other file, or invoke /photos directly. Reads the batch note first — the note is usually the actual instruction — then the images and files, then does the work it asks for.
 ---
 
 # Pick up dropped photos
@@ -13,6 +13,7 @@ phone keyboard.
 ```
 ~/drop/0007/note.md        what they typed — often the real instruction
 ~/drop/0007/1-IMG_x.jpg    shots, numbered in the order they picked them
+~/drop/0007/2-site.zip     any other file (the page's "files" picker), same numbering
 ~/drop/latest              symlink -> newest batch
 ```
 
@@ -43,9 +44,17 @@ phone keyboard.
    pulling in twenty. A batch can hold any number (30 verified); the limit is your
    context, not the tool.
 
+   **Non-image files** (zip, pdf, txt, …) are not shots — don't Read a binary.
+   A zip: `unzip -l` to see what's inside, then extract into the scratchpad or
+   wherever the note says it belongs (a new `~/dev/<repo>`, say) — never inside
+   `~/drop/<n>/`, where the extracted files would show up on the page as part of
+   the batch. A PDF: Read it with `pages`. Text: Read it.
+
 4. **Do the work the note asks for.** This is the point of the skill — the founder
    dropped the photos to get something done, not to have them described. If it's a
-   UI bug, go find the code and fix it. If it's a document or a rating plate,
+   UI bug, go find the code and fix it. A note starting `scrapbook:` is a UI
+   reference from another app, not a bug: follow the intake in
+   `~/vault/1_projects/osnova/engineering/ui-scrapbook.md`. If it's a document or a rating plate,
    transcribe it. Describe the image only when describing *is* the request, or when
    you need to confirm you're looking at the right thing before acting.
 

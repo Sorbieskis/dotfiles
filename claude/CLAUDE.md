@@ -29,12 +29,22 @@ Public 22 is closed (UFW) and filtered (netcup SCP policy `osnova-vps`, 2026-09-
 
 - Projects live in `~/dev/<project>`: flat, one dir per repo, NEVER moved
   (Claude Code history and memory are keyed by path). One Claude conversation
-  per project (new tab: `zellij action new-tab --name <p> --cwd ~/dev/<p>`).
+  per project (new tab, by hand from an attached terminal: `zellij action new-tab --name <p> --cwd ~/dev/<p>`).
+  Agents never add a tab while no client is attached: on zellij 0.45.1 that makes the next attach
+  panic the whole session (osnova died this way 2026-10-14 and -15); the hook
+  (`claude/hooks/zellij-no-new-tab.py`) allows new-tab only while `list-clients` shows a client.
+  Orchestrators run in an `osnova` tab (founder 2026-10-15): unattended, reuse an existing idle tab
+  by pane id (`action list-panes -t -c` → `action write-chars -p terminal_N …`), then name it after
+  the new seat with `action rename-tab-by-id <TAB_ID> <name>` (plain `rename-tab` only hits the focused
+  tab); with no client attached, `go-to-tab-name` and a plain `write-chars` silently do nothing (tested 2026-10-15). `zj-spawn <new-session> <cwd> <cmd…>` is for other long-running panes.
   Persistent session `main`: `zellij attach main`, never bare `zellij` (creates
   strays). Recreated at boot by the user unit `zellij-main.service`.
-- RAM: 32 GB. The `main` session runs inside `zellij-main.service` with
-  MemoryMax=20G, so everything started in it (Claude Code, cargo, node) shares a
-  20 GB cap and cannot evict the stacks. earlyoom prefers killing
+- RAM: 32 GB. EVERY zellij session runs inside the user slice `zellij.slice`
+  (MemoryHigh=24G, MemoryMax=26G since 2026-10-17; 18/20 thrashed), so everything started in them (Claude Code, cargo,
+  node) shares one 26 GB cap; production keeps a guaranteed 4 GB (system.slice MemoryLow, osnova-infra). Starting from SSH is fine: the fish
+  `zellij` function wraps it in `systemd-run --user --scope --slice=zellij.slice`, and zj-spawn and
+  zellij-main.service join the same slice (since 2026-10-15; before that, SSH-started sessions were
+  uncapped). Check: `systemctl --user status zellij.slice`. earlyoom prefers killing
   cargo/rustc/clippy/rust-analyzer/node/python3 and never
   claude/zellij/postgres/docker/sshd/tailscaled. Check with `free -m`. Truly
   huge builds go outside zellij: `systemd-run --user -p MemoryMax=8G --scope cargo …`.
@@ -46,11 +56,11 @@ Public 22 is closed (UFW) and filtered (netcup SCP policy `osnova-vps`, 2026-09-
   (password set 2026-09-10, in the password manager) and sudo up. Root is
   locked (`!`) and sshd is key-only, so `dima` is the ONLY way in if Tailscale
   breaks — verify with `sudo passwd -S dima` (must read `P`, not `L`).
-- Sending images to an agent from the phone: `photo-drop` (unchanged).
+- Sending images or files (zip, pdf, …) to an agent from the phone: `photo-drop`.
   http://100.93.13.127:8123 (tailnet-only, `photo-drop.service`, always up).
-  One pick = one numbered batch in `~/drop/<n>/` plus an optional note. Then
-  "look at the newest" or "batch 7": read `note.md` and the shots. Source:
-  `~/.dotfiles/bin/photo-drop`.
+  One pick ("photos" or "files" button) = one numbered batch in `~/drop/<n>/`
+  plus an optional note. Then "look at the newest" or "batch 7": read `note.md`
+  and the shots. Source: `~/.dotfiles/bin/photo-drop`.
 - Showing dima a 3D model (any project, decided 2026-09-26): a link to the model
   viewer, never a screenshot, an artifact or a file. http://100.93.13.127:8125/
   (tailnet-only, `model-view.service`, always up; he opens it on the phone). Put

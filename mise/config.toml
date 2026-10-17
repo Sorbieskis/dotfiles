@@ -6,7 +6,7 @@
 node = "lts"
 python = "3.12"
 uv = "latest"
-zellij = "0.43.0"
+zellij = "0.45.1"
 yazi = "latest"
 lazygit = "0.61.1"
 lazydocker = "0.25.2"

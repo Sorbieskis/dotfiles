@@ -1,0 +1,16 @@
+[Unit]
+Description=site-preview — the marketing site's preview on the tailnet only (replaced preview.osnovasystems.com 2026-10-12)
+# Serves ~/.local/share/site-preview (a `tools/build.py --split` folder plus fonts/, privacy.html, imprint.html) on
+# http://<tailscale ip>:8126/. Tailnet address only, never a wildcard or loopback bind; no login (the tailnet is the gate).
+# Like photo-drop: polls 60 s for the tailnet address, exits non-zero without one, Restart=always retries.
+After=network-online.target
+ConditionPathExists=%h/.local/share/site-preview/index.html
+
+[Service]
+Type=simple
+ExecStart=/bin/sh -c 'for i in $(seq 60); do ip=$(tailscale ip -4 2>/dev/null | head -n1); [ -n "$ip" ] && exec python3 -m http.server 8126 --bind "$ip" --directory %h/.local/share/site-preview; sleep 1; done; exit 1'
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

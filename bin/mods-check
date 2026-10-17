@@ -1,0 +1,19 @@
+#!/bin/bash
+# Daily: has Anthropic's rollout switch turned Claude Code mods on for this install?
+# `claude plugin test` in a mod-less dir says "turned off in this process" while off.
+# Pings ntfy once when it flips (marker file), then stays quiet. Mod to try:
+# ~/.dotfiles/claude/mods/redact-secrets (run `claude plugin test` there).
+set -uo pipefail
+marker="$HOME/.cache/mods-check.notified"
+[ -e "$marker" ] && exit 0
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+out=$(cd "$tmp" && claude plugin test 2>&1)
+case "$out" in
+  *"turned off in this process"*) exit 0 ;;   # still off remotely
+  *"no hooks module to load"*|*"hooks modules are turned off here"*) ;;
+  *) exit 0 ;;                                  # unknown text: don't claim a flip
+esac
+topic=$(cat /etc/osnova/ntfy-ci-topic 2>/dev/null || true)
+msg="Claude Code mods: $(echo "$out" | head -1)"
+[ -n "$topic" ] && curl -fsS -H "Title: mods rollout" -d "$msg" "https://ntfy.sh/$topic" >/dev/null || true
+mkdir -p "$(dirname "$marker")" && echo "$msg" > "$marker"

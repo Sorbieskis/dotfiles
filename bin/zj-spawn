@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# zj-spawn <session> <cwd> <command...>
+#
+# Start <command> in a NEW detached zellij session, from a clean login env.
+# The only sanctioned way for an agent to open a new long-running pane (e.g. a successor orchestrator).
+#
+# Why not `zellij -s <s> action new-tab`: on zellij 0.45.1, new-tab on a session with NO client attached
+# leaves a broken tab, and the next client attach panics the whole server ("failed to attach client N to
+# tab with index M"), killing every pane in it. Reproduced 2026-10-15; it took down `osnova` twice
+# (2026-10-14, 2026-10-15). A background session start (`attach -b -c --layout`) is safe.
+# Why env -i: a server spawned from Claude's Bash inherits CLAUDE_CODE_CHILD_SESSION etc. into every pane.
+set -euo pipefail
+
+if [ $# -lt 3 ]; then
+  echo "usage: zj-spawn <session> <cwd> <command...>   (opens it in a new detached zellij session)" >&2
+  exit 2
+fi
+s=$1; cwd=$(realpath "$2"); shift 2
+cmd="$*"
+
+zj=$(mise which zellij 2>/dev/null || command -v zellij)
+if "$zj" list-sessions -n 2>/dev/null | grep -q "^$s \["; then
+  echo "zj-spawn: session '$s' already exists; pick a new name (adding tabs to a live session is what crashes it)" >&2
+  exit 1
+fi
+
+q() { local v=${1//\\/\\\\}; printf '"%s"' "${v//\"/\\\"}"; }   # KDL string literal
+rt=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}; dir=$rt/zj-spawn; mkdir -p "$dir"
+layout=$dir/$s.kdl
+cat > "$layout" <<EOF
+layout {
+    cwd $(q "$cwd")
+    tab name=$(q "$s") {
+        pane size=1 borderless=true {
+            plugin location="zellij:tab-bar"
+        }
+        pane command="fish" {
+            args "-l" "-c" $(q "$cmd; exec fish")
+        }
+        pane size=1 borderless=true {
+            plugin location="zellij:status-bar"
+        }
+    }
+}
+EOF
+
+# inside zellij.slice, so the session shares the 20 GB cap (systemd/user/zellij.slice)
+setsid systemd-run --user --scope --slice=zellij.slice --quiet --collect -- env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" SHELL=/usr/bin/fish TERM=xterm-256color LANG=en_US.UTF-8 \
+  XDG_RUNTIME_DIR="$rt" DBUS_SESSION_BUS_ADDRESS="unix:path=$rt/bus" \
+  PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" \
+  "$zj" --layout "$layout" attach -b -c "$s" </dev/null >/dev/null 2>&1
+
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  pid=$(pgrep -f "[z]ellij --server .*/$s\$" || true)
+  [ -n "$pid" ] && break; sleep 0.5
+done
+if [ -z "$pid" ]; then echo "zj-spawn: session '$s' did not start (try: $zj --layout $layout attach -b -c $s)" >&2; exit 1; fi
+if tr '\0' '\n' < "/proc/$pid/environ" | grep -q '^CLAUDE'; then echo "zj-spawn: WARNING server $pid has CLAUDE* env vars" >&2; fi
+echo "started zellij session '$s' (server $pid). Attach: zellij attach $s"
