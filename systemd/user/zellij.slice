@@ -1,0 +1,13 @@
+[Unit]
+Description=Every zellij session (and its panes: Claude Code, cargo, node) under one memory cap
+
+# One cap for ALL sessions, however they were started: the fish `zellij` wrapper (fish/config.fish),
+# zj-spawn and zellij-main.service all put the server here. Without it a session started from an SSH
+# login lands in that login's session scope with no cap at all (found 2026-10-15: every session was
+# uncapped and zellij-main.service held 4 KB). MemoryHigh reclaims/throttles first; MemoryMax is the wall.
+# Production's room is a GUARANTEE, not this gap: osnova-infra's system.slice drop-in sets MemoryLow=4G.
+# 18G/20G thrashed (2026-10-17: the slice sat at 17-19 GB against MemoryHigh, swapping live Claude/cargo
+# memory, while the box had 17 GB available).
+[Slice]
+MemoryHigh=24G
+MemoryMax=26G
