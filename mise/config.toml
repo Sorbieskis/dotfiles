@@ -19,6 +19,8 @@ dbmate = "2.33.0"
 "github:zeux/meshoptimizer" = { version = "v1.2", asset_pattern = "gltfpack-ubuntu.zip", bin = "gltfpack" }  # glTF optimiser (marketing 3D model)
 blender = "5.2.2"  # LTS, official build with its own Python + numpy; replaces Debian's 4.3 (marketing 3D model, 2026-09-26)
 "aqua:gitleaks/gitleaks" = "8.30.1"  # vault-backup.sh scans the unpushed range before pushing to GitHub (2026-10-05)
+go = "1.25"  # builds packwiz (belles-modpack, 2026-10-21)
+"go:github.com/packwiz/packwiz" = "170b22d785959dda5876b54b7f16e1b807a57fb6"  # no releases; pinned commit (belles-modpack M3)
 
 [settings]
 experimental = true
