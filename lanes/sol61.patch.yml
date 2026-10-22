@@ -1,0 +1,37 @@
+# Written by bin/lane — edit bin/lane, not this.
+- id: bash-sandbox
+  config:
+    timeoutMs: 600000
+    maxTimeoutMs: 900000
+- id: llm-pi-ai
+  config:
+    providers:
+      openai-codex:
+        models:
+          - id: gpt-5.3-codex-spark
+          - id: gpt-5.4
+          - id: gpt-5.4-mini
+          - id: gpt-5.5
+          - id: gpt-5.6-luna
+          - id: gpt-5.6-sol
+          - id: gpt-5.6-terra
+          - id: gpt-6-astra
+          - id: gpt-6-luna
+            contextWindow: 272000
+            maxTokens: 128000
+            input: [text, image]
+            reasoningEfforts: {"off":"none","minimal":"low","low":"low","medium":"medium","high":"high","xhigh":"xhigh","max":"max"}
+          - id: gpt-6-sol
+            contextWindow: 272000
+            maxTokens: 128000
+            input: [text, image]
+            reasoningEfforts: {"off":"none","minimal":"low","low":"low","medium":"medium","high":"high","xhigh":"xhigh","max":"max"}
+          - id: gpt-6.1-sol
+            contextWindow: 272000
+            maxTokens: 128000
+            input: [text, image]
+            reasoningEfforts: {"minimal":"low","low":"low","medium":"medium","high":"high","xhigh":"xhigh","max":"max"}
+- id: agent-default-model
+  config:
+    provider: openai-codex
+    model: gpt-6.1-sol

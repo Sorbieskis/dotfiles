@@ -1,0 +1,9 @@
+# Written by bin/lane — edit bin/lane, not this.
+- id: bash-sandbox
+  config:
+    timeoutMs: 600000
+    maxTimeoutMs: 900000
+- id: agent-default-model
+  config:
+    provider: deepseek-official
+    model: deepseek-flash

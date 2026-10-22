@@ -1,0 +1,4 @@
+- id: agent-default-model
+  config:
+    provider: openai-codex
+    model: gpt-6-luna
