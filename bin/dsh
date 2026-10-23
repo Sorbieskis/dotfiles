@@ -74,6 +74,12 @@ route="${1:-$DEFAULT_ROUTE}"
 [ $# -gt 0 ] && shift || true
 [ "${1:-}" = "--" ] && shift || true
 
+# A harness cannot replace the packages its current seat is executing. The staged
+# upgrade activates before the next launch, once every existing seat has exited.
+if [ -f "$LANE/.upgrade-pending.json" ]; then
+  python3 "$LANE/activate-upgrade.py" "$LANE" "$LANE_REPO"
+fi
+
 [ -x "$DSH_BIN" ] || { echo "dsh: no lane install at $LANE — run osnova-product's \`./bin/lane install\`" >&2; exit 2; }
 
 # ⚠ ASK THE LANE, DO NOT KEEP A SECOND LIST. `bin/lane resolve-route <name>` answers the
