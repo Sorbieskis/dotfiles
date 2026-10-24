@@ -132,6 +132,11 @@ Secrets: SOPS .env.enc in osnova-infra, age key /root/.config/sops/age (Bitwarde
   experiments (named YYYY-MM-slug under `~/lab`, expire after 60 days). An
   unlabeled container is a leak. Networks: web, db (prod only) | lab.
 
+## Before building anything (dima, 2026-10-24)
+
+- Check first whether an established tool, mod, library or service already does it; search before
+  designing. Build only the gap it leaves, and say what was checked.
+
 ## Don'ts
 
 - Don't reconfigure ufw, sshd, tailscale, or the zellij-main service/timer
