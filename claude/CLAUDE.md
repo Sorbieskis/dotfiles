@@ -57,10 +57,14 @@ Public 22 is closed (UFW) and filtered (netcup SCP policy `osnova-vps`, 2026-09-
   locked (`!`) and sshd is key-only, so `dima` is the ONLY way in if Tailscale
   breaks — verify with `sudo passwd -S dima` (must read `P`, not `L`).
 - box-hub (since 2026-10-26): ONE tailnet page every session uses, tabs **Drop · Models · Pictures**,
-  each browsed by root (lab, schk, drop, marketing) then folder, newest first, with search.
-  http://100.93.13.127:8123/ (8125 is the same server, opening on Models; all old 8123/8125 links work).
-  `box-hub.service`, always up. Source: `~/dev/box-hub` (`SPEC.md` has the routes). A project that keeps
-  its own models or pictures gets its own root in the unit (`--root NAME=PATH`); never `~/dev/asml`.
+  each grouped by PROJECT (the repo a thing came from), then folder, newest first, with search; Drop is
+  the phone inbox, Unsorted what has no known origin. http://100.93.13.127:8123/ (8125 is the same server,
+  opening on Models; all old 8123/8125 links work). `box-hub.service`, always up. Source: `~/dev/box-hub`
+  (`SPEC.md` has the routes and rules). A `~/lab` folder's project is inferred from which repo's sessions
+  used it first (no list of repos: a new `~/dev/<repo>` becomes a group by itself); when you make a lab
+  folder for a repo, also write its name into `~/lab/<slug>/.origin` (one line, e.g. `osnova-product`),
+  which beats the guess. A repo that keeps its own models or pictures in its tree gets a root in the unit
+  (`--root NAME=PATH --project NAME=<repo>`); never `~/dev/asml`.
   photo-drop.service and model-view.service are disabled, kept until box-hub has had a day of use.
 - Sending images or files (zip, pdf, …) to an agent from the phone: box-hub's Drop tab
   (http://100.93.13.127:8123). One pick ("photos" or "files" button) = one numbered batch in
@@ -76,7 +80,7 @@ Public 22 is closed (UFW) and filtered (netcup SCP policy `osnova-vps`, 2026-09-
 - Showing dima a picture (PNG/JPG/WebP/GIF, any project, decided 2026-10-26): a box-hub Pictures link,
   not an artifact, not a file path. Put it under `~/lab/YYYY-MM-slug/` (or a root's folder) and send
   `http://100.93.13.127:8123/p/lab/YYYY-MM-slug/<file>.png` (one picture, swipe for the rest of the
-  folder) or `http://100.93.13.127:8123/#pictures/lab/YYYY-MM-slug` (the folder's gallery). Names:
+  folder) or `http://100.93.13.127:8123/#pictures/<repo>/lab/YYYY-MM-slug` (the folder's gallery). Names:
   letters, digits, `._-` only (a name with a space or other character is not listed), at most 5 folders deep.
 - Two GitHub accounts (unchanged): `Sorbieskis` (personal) and `dsuchank`
   (`~/dev/asml`, own key + noreply email via an `includeIf`). Keep `Sorbieskis`
