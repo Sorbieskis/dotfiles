@@ -104,7 +104,6 @@ Public 22 is closed (UFW) and filtered (netcup SCP policy `osnova-vps`, 2026-09-
 /opt/scripts            pg-backup, uptime-check, box-cleanup, stack-drift (from osnova-infra/scripts)
 /var/backups/postgres   daily pg-backup dumps (03:30); restic ships them + the rest offsite to Cloudflare R2 at 03:40
 /etc/systemd/system     forgejo-runner, minecraft (both in osnova-infra/host/systemd)
-Docker: project = prod stack name | osnova-dev (dev pg 5433) | lab-*; anything unlabeled is a leak. Networks: web, db (prod only) | lab
 Secrets: SOPS .env.enc in osnova-infra, age key /root/.config/sops/age (Bitwarden); API keys only in ~/.config/fish/secrets.fish (untracked)
 ```
 
@@ -136,6 +135,7 @@ Secrets: SOPS .env.enc in osnova-infra, age key /root/.config/sops/age (Bitwarde
 
 - Check first whether an established tool, mod, library or service already does it; search before
   designing. Build only the gap it leaves, and say what was checked.
+- A question or decision that turns on a number about the box, infra, CI or the loop: run `obs` first, cite it, or say it is unmeasured.
 
 ## Don'ts
 

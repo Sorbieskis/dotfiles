@@ -33,6 +33,7 @@ command -v batcat >/dev/null && ln -sf "$(command -v batcat)" ~/.local/bin/bat
 [ -x /usr/lib/cargo/bin/fd ] && ln -sf /usr/lib/cargo/bin/fd ~/.local/bin/fd
 # the osnova board from any directory
 [ -x ~/dev/osnova-product/bin/board ] && ln -sf ~/dev/osnova-product/bin/board ~/.local/bin/board
+[ -x ~/dev/osnova-product/bin/obs ] && ln -sf ~/dev/osnova-product/bin/obs ~/.local/bin/obs
 for u in "$D"/systemd/user/*; do ln -sf "$u" ~/.config/systemd/user/"$(basename "$u")"; done
 
 echo "==> mise: runtimes and CLI tools"
