@@ -1,14 +1,18 @@
 ---
 name: photos
-description: Pick up photos or files the founder just dropped from their phone via photo-drop (~/drop) and act on them. Use when they say they uploaded/dropped/sent a picture, screenshot, zip, PDF or other file, or invoke /photos directly. Reads the batch note first — the note is usually the actual instruction — then the images and files, then does the work it asks for.
+description: Pick up photos or files the founder just dropped from their phone via box-hub's Drop tab (~/drop) and act on them. Use when they say they uploaded/dropped/sent a picture, screenshot, zip, PDF or other file, or invoke /photos directly. Reads the batch note first — the note is usually the actual instruction — then the images and files, then does the work it asks for.
 ---
 
 # Pick up dropped photos
 
 A terminal session can't take an attachment, so the founder sends images through
-**photo-drop** (`http://100.93.13.127:8123`, tailnet-only, `photo-drop.service`).
+the **Drop tab of box-hub** (`http://100.93.13.127:8123`, tailnet-only, `box-hub.service`,
+source `~/dev/box-hub`; it replaced photo-drop on 2026-10-26, same page, same `~/drop`).
 One pick = one numbered batch in `~/drop/<n>/`, with an optional note typed on the
-phone keyboard.
+phone keyboard. A batch whose note says "Sent from the model view" is a 3D viewer
+Send view: `1-view.png` plus a note with a link that reopens exactly that view.
+To show the founder a picture back, send a box-hub Pictures link
+(`http://100.93.13.127:8123/p/drop/<n>/<file>`, or a `~/lab` file at `/p/lab/...`), not an artifact.
 
 ```
 ~/drop/0007/note.md        what they typed — often the real instruction
@@ -67,6 +71,6 @@ phone keyboard.
 
 - `~/drop/` empty or only `latest` → say so and give the URL. Don't hunt elsewhere.
 - Newly-dropped photos missing → check the service is up:
-  `systemctl --user is-active photo-drop` and `journalctl --user -u photo-drop -n 20`.
+  `systemctl --user is-active box-hub` and `journalctl --user -u box-hub -n 20`.
   It binds the Tailscale IP, so it also fails if the tailnet is down. Restart with
-  `systemctl --user restart photo-drop`.
+  `systemctl --user restart box-hub`.

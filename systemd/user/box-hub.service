@@ -1,0 +1,22 @@
+[Unit]
+Description=box-hub — one tailnet page for drop, models and pictures (replaces photo-drop + model-view, 2026-10-26)
+# ~/dev/box-hub/box_hub.py on BOTH old ports: http://<tailscale ip>:8123/ (opens on Drop) and :8125 (opens on Models),
+# so every old photo-drop and model-view link keeps working. Drop batches in ~/drop as before; the marketing viewer
+# is served read-only from ~/dev/osnova-marketing-model (that repo owns it); roots: ~/lab and the SCHK model clone.
+# Like photo-drop: tailscaled is a SYSTEM unit, so the script polls 60 s for the tailnet address and exits non-zero
+# without one (never a loopback bind), which Restart=always retries. A port still held by an old unit is retried
+# every 10 s. photo-drop.service and model-view.service stay installed but disabled until box-hub has proven itself.
+After=network-online.target
+ConditionPathExists=%h/dev/box-hub/box_hub.py
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/dev/box-hub/box_hub.py --root lab=%h/lab --root schk=%h/dev/schk-software-model/models
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=10
+# thumbnails shell out to ImageMagick (two at a time, 256 MiB each); the server itself needs little
+MemoryMax=1G
+
+[Install]
+WantedBy=default.target

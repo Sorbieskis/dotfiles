@@ -7,7 +7,7 @@ host or VM only once colleagues depend on it daily). Unlike a disposable devbox,
 mistakes here take down services people use.
 
 Tailscale: this box is `osnova-vps` at 100.93.13.127 (pinned 2026-09-07, same address as
-the old box), so photo-drop (http://100.93.13.127:8123) and dockge (http://100.93.13.127:5001)
+the old box), so box-hub (http://100.93.13.127:8123, ex photo-drop) and dockge (http://100.93.13.127:5001)
 kept their URLs. Admin SSH is Tailscale SSH only: `ssh dima@osnova-vps` / `ssh root@osnova-vps`.
 Public 22 is closed (UFW) and filtered (netcup SCP policy `osnova-vps`, 2026-09-10).
 
@@ -56,22 +56,28 @@ Public 22 is closed (UFW) and filtered (netcup SCP policy `osnova-vps`, 2026-09-
   (password set 2026-09-10, in the password manager) and sudo up. Root is
   locked (`!`) and sshd is key-only, so `dima` is the ONLY way in if Tailscale
   breaks — verify with `sudo passwd -S dima` (must read `P`, not `L`).
-- Sending images or files (zip, pdf, …) to an agent from the phone: `photo-drop`.
-  http://100.93.13.127:8123 (tailnet-only, `photo-drop.service`, always up).
-  One pick ("photos" or "files" button) = one numbered batch in `~/drop/<n>/`
-  plus an optional note. Then "look at the newest" or "batch 7": read `note.md`
-  and the shots. Source: `~/.dotfiles/bin/photo-drop`.
-- Showing dima a 3D model (any project, decided 2026-09-26): a link to the model
-  viewer, never a screenshot, an artifact or a file. http://100.93.13.127:8125/
-  (tailnet-only, `model-view.service`, always up; he opens it on the phone). Put
-  the `.glb` under `~/lab/YYYY-MM-slug/` and send
-  `http://100.93.13.127:8125/?glb=/r/lab/YYYY-MM-slug/<file>.glb` (`&lines=1` for a
-  `<file>_lines.glb` drawing twin). A project that keeps its own models gets its own
-  folder in the unit (`--root NAME=PATH`, then `/r/NAME/...`; the SCHK site's is `schk`); never `~/dev/asml`.
-  The marketing laser cutter is the built-in root (`?size=6025&view=door&door=1`).
-  He answers with its Send view button: picture, note and a link to that exact view
-  land in `~/drop` like a photo-drop batch. Source:
-  `~/dev/osnova-marketing-model/model/serve.py` + `tools/glbview.html`.
+- box-hub (since 2026-10-26): ONE tailnet page every session uses, tabs **Drop · Models · Pictures**,
+  each browsed by root (lab, schk, drop, marketing) then folder, newest first, with search.
+  http://100.93.13.127:8123/ (8125 is the same server, opening on Models; all old 8123/8125 links work).
+  `box-hub.service`, always up. Source: `~/dev/box-hub` (`SPEC.md` has the routes). A project that keeps
+  its own models or pictures gets its own root in the unit (`--root NAME=PATH`); never `~/dev/asml`.
+  photo-drop.service and model-view.service are disabled, kept until box-hub has had a day of use.
+- Sending images or files (zip, pdf, …) to an agent from the phone: box-hub's Drop tab
+  (http://100.93.13.127:8123). One pick ("photos" or "files" button) = one numbered batch in
+  `~/drop/<n>/` plus an optional note. Then "look at the newest" or "batch 7": read `note.md`
+  and the shots (the `/photos` skill).
+- Showing dima a 3D model (any project, decided 2026-09-26): a box-hub model link, never a
+  screenshot, an artifact or a file; he opens it on the phone. Put the `.glb` under
+  `~/lab/YYYY-MM-slug/` and send `http://100.93.13.127:8125/?glb=/r/lab/YYYY-MM-slug/<file>.glb`
+  (`&lines=1` for a `<file>_lines.glb` drawing twin; other roots: `/r/NAME/...`, the SCHK site's is `schk`).
+  The marketing laser cutter is the built-in root (`?size=6025&view=door&door=1`); its viewer page stays in
+  `~/dev/osnova-marketing-model` (`tools/glbview.html`), box-hub only serves it. He answers with its Send
+  view button: picture, note and a link to that exact view land in `~/drop` as a batch.
+- Showing dima a picture (PNG/JPG/WebP/GIF, any project, decided 2026-10-26): a box-hub Pictures link,
+  not an artifact, not a file path. Put it under `~/lab/YYYY-MM-slug/` (or a root's folder) and send
+  `http://100.93.13.127:8123/p/lab/YYYY-MM-slug/<file>.png` (one picture, swipe for the rest of the
+  folder) or `http://100.93.13.127:8123/#pictures/lab/YYYY-MM-slug` (the folder's gallery). Names:
+  letters, digits, `._-` only (a name with a space or other character is not listed), at most 5 folders deep.
 - Two GitHub accounts (unchanged): `Sorbieskis` (personal) and `dsuchank`
   (`~/dev/asml`, own key + noreply email via an `includeIf`). Keep `Sorbieskis`
   the ACTIVE gh account and use `ghw <cmd>` for work: `gh auth switch` is
@@ -86,8 +92,8 @@ Public 22 is closed (UFW) and filtered (netcup SCP policy `osnova-vps`, 2026-09-
 ~/dev/schk-software-model     exception 2: the same for schk-software (repo decision 18); its models/ is the model viewer's root `schk` (/r/schk/...)
 ~/dev/asml/             work account (dsuchank)
 ~/dev/osnova-infra      source of /opt/stacks (deploy.sh) and host config (bootstrap.sh); never edit /opt/stacks by hand
-~/lab/YYYY-MM-slug      experiments + lab-* containers, expire 60 days after last change (in use since 2026-09, expiry not automated yet; its GLBs show in the model viewer)
-~/drop/<n>/             phone batches from photo-drop (http://100.93.13.127:8123)
+~/lab/YYYY-MM-slug      experiments + lab-* containers, expire 60 days after last change (in use since 2026-09, expiry not automated yet; its GLBs and pictures show in box-hub)
+~/drop/<n>/             phone batches from box-hub's Drop tab (http://100.93.13.127:8123)
 ~/wt/osnova-<n>         osnova-product `bin/wt` slots: warm git worktrees with build caches (~260 GB for 6, by design); manage with bin/wt, never rm by hand
 ~/dsh-play/             the dsh seat + build lane's home (lane scratch clones, relay, replays; ~110 GB, mostly build output)
 ~/git/<name>.git        local bare remotes (locator.git is ~/dev/asml/locator's remote)
@@ -98,8 +104,8 @@ Public 22 is closed (UFW) and filtered (netcup SCP policy `osnova-vps`, 2026-09-
 ~/.local/share/mise     every mise-managed tool (node, python, uv, zellij, ...); nothing hand-placed in ~/.local/bin or /usr/local/bin
 ~/.local/opt/           hand-installed trees not on PATH by themselves: verapdf (moved here 2026-09-27)
 ~/.venvs/pw             Playwright venv (uv). ~/.cache ~/.cargo ~/.rustup ~/.npm ~/.venvs are rebuildable: not backed up, not migrated
-~/.config/systemd/user  photo-drop.service, model-view.service (3D model viewer for the phone, marketing models
-                        + ~/lab, http://100.93.13.127:8125/), zellij-main.{service,timer} (all in .dotfiles/systemd/user)
+~/.config/systemd/user  box-hub.service (drop + 3D models + pictures for the phone, http://100.93.13.127:8123/ and :8125),
+                        zellij-main.{service,timer}; photo-drop + model-view disabled (all in .dotfiles/systemd/user)
 /opt/stacks/<svc>       running prod compose + decrypted .env (generated by deploy.sh, root-deployed)
 /opt/scripts            pg-backup, uptime-check, box-cleanup, stack-drift (from osnova-infra/scripts)
 /var/backups/postgres   daily pg-backup dumps (03:30); restic ships them + the rest offsite to Cloudflare R2 at 03:40
@@ -120,7 +126,7 @@ Secrets: SOPS .env.enc in osnova-infra, age key /root/.config/sops/age (Bitwarde
 - uv: Python project envs. The Playwright venv `~/.venvs/pw` is built by uv from
   `osnova-product/tests/ui-smoke/requirements.txt`.
 - `~/.dotfiles/install.sh` applies the whole dima layer idempotently: symlinks,
-  `mise install`, rustup, fish as login shell, user units photo-drop +
+  `mise install`, rustup, fish as login shell, user units box-hub +
   zellij-main, hourly vault-backup crontab. The old Void-only bootstrap.sh is
   superseded.
 - Rule: nothing hand-placed in `/usr/local/bin` or `~/.local/bin` any more.
