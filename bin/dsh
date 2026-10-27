@@ -144,7 +144,8 @@ for i in ids:
 efforts = {"off": "none", "minimal": "low", "low": "low", "medium": "medium",
            "high": "high", "xhigh": "xhigh", "max": "max"}
 # gpt-6.1-sol's catalogue map has `off: null`, and gpt-6.1-terra (hand-declared, terra map) has no
-# `off` either: no "none" effort to offer.
+# `off` either: no "none" effort to offer. Its contextWindow 272000 is ASSUMED from the 5.6/6.0
+# entries, unverified: pi-ai 1.4.0 has no gpt-6.1-terra entry to copy from.
 no_off = {k: v for k, v in efforts.items() if k != "off"}
 for m in extra:
     print(f"          - id: {m}")
