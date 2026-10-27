@@ -3,15 +3,16 @@
 
 Two jobs, both keyed on a subagent's context = its own transcript's last assistant usage
 (input + cache read + cache create).
-1. NOTICE (always on): when a subagent first crosses a line (Haiku-class 100k and 190k, every
-   other model 150k and 190k) the crossing is recorded per spawning session in
+1. NOTICE (always on): when a subagent first crosses a line (Haiku-class 90k and 190k, every
+   other model 150k and 190k; 90k is where a Haiku seat's brief says stop and report, founder 2026-10-27)
+   the crossing is recorded per spawning session in
    ~/.cache/subagent-ctx/<session_id>.json; the next tool call of the SPAWNING session (no agent_id)
    gets one additionalContext line per crossing, information only. SubagentStop retires the
    agent's entry once its notices are delivered. `touch ~/.cache/subagent-ctx/DISABLE` turns the
    whole hook off.
 2. ENFORCEMENT (off unless CLAUDE_SUBAGENT_LIMIT_ENFORCE=1): over the soft limit (190k, every
-   model; 100k is a target, never a stop: founder 2026-10-12) only the allowlist below runs; at the
-   hard limit (300k) every tool is denied.
+   model; enforcement never stops a Haiku earlier: founder 2026-10-12) only the allowlist below runs;
+   at the hard limit (300k) every tool is denied.
 Any error or unreadable input allows the call (fail open).
 Recipe and evidence: ~/lab/2026-10-loop-mods/part3-context-hook-probe.md, part5-spawner-notice-probe.md.
 """
@@ -25,7 +26,7 @@ import tempfile
 # Enforcement thresholds, in tokens (only with CLAUDE_SUBAGENT_LIMIT_ENFORCE=1).
 LIMITS = {"soft": 190_000, "hard": 300_000}
 # Notice lines, in tokens: informational only, per model class.
-NOTICE_LINES = {"haiku": (100_000, 190_000), "other": (150_000, 190_000)}
+NOTICE_LINES = {"haiku": (90_000, 190_000), "other": (150_000, 190_000)}
 ENFORCE_ENV = "CLAUDE_SUBAGENT_LIMIT_ENFORCE"
 STALE_SECS = 3 * 24 * 3600  # state files of dead sessions
 

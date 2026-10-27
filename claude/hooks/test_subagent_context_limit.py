@@ -227,7 +227,7 @@ class SpawnerNotice(Fixture):
         self.assertEqual((rc, out), (0, ""))  # a subagent is told nothing
         rc, out, _ = self.main_call()
         self.assertEqual(self.notice_lines(out),
-                         ['subagent "build the thing" (claude-haiku-5-5) is at ~104k context (crossed 100k)'])
+                         ['subagent "build the thing" (claude-haiku-5-5) is at ~104k context (crossed 90k)'])
         self.assertEqual(self.main_call()[1], "")  # never repeated
         run(self.event("Bash", command="ls"), enforce=False)  # the subagent calls again at the same size
         self.assertEqual(self.main_call()[1], "")
@@ -241,6 +241,14 @@ class SpawnerNotice(Fixture):
         lines = self.notice_lines(self.main_call()[1])
         self.assertEqual(len(lines), 1)
         self.assertIn("crossed 190k", lines[0])
+
+    def test_haiku_first_line_is_90k(self):
+        self.sub("A1", 89_000, model="haiku")
+        run(self.event("Bash", command="ls"), enforce=False)
+        self.assertEqual(self.main_call()[1], "")
+        self.sub("A1", 91_000, model="haiku")
+        run(self.event("Bash", command="ls"), enforce=False)
+        self.assertIn("crossed 90k", self.main_call()[1])
 
     def test_non_haiku_first_line_is_150k(self):
         self.sub("A1", 120_000, model="inherit")
@@ -262,14 +270,14 @@ class SpawnerNotice(Fixture):
         other = json.loads(self.event("Bash", aid=None, command="ls"))
         other["session_id"] = "other"
         self.assertEqual(run(json.dumps(other), enforce=False)[1], "")
-        self.assertIn("crossed 100k", self.main_call()[1])
+        self.assertIn("crossed 90k", self.main_call()[1])
 
     def test_finished_agent_is_cleaned_up(self):
         self.sub("A1", 104_000, model="haiku")
         run(self.event("Bash", command="ls"), enforce=False)
         stop = json.dumps({"hook_event_name": "SubagentStop", "session_id": "sess", "agent_id": "A1"})
         run(stop, enforce=False)  # stops with its notice undelivered: kept, flagged finished
-        self.assertIn("crossed 100k", self.main_call()[1])
+        self.assertIn("crossed 90k", self.main_call()[1])
         self.assertEqual(os.listdir(STATE["dir"]) and [n for n in os.listdir(STATE["dir"]) if n.endswith(".json")], [])
         self.assertEqual(self.main_call()[1], "")
 
