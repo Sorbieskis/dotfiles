@@ -44,7 +44,7 @@ usage() {
   cat <<EOF
 usage: dsh [route] [-- dsh args...]
 
-  route    luna (default) · sol · terra · astra · luna6 · sol6 · sol61 · v4 · v4-pro,
+  route    luna (default) · sol · terra · astra · luna6 · sol6 · sol61 · terra61 · v4 · v4-pro,
            or a bare deepseek-* model id. Use sol61 (gpt-6.1-sol) rather than sol6
            (gpt-6-sol); luna6 and astra are unaffected (founder 2026-10-15).
            Resolved through osnova-product's \`bin/lane resolve-route\` when that checkout
@@ -99,6 +99,7 @@ else
     luna6) provider=openai-codex; model=gpt-6-luna ;;
     sol6)  provider=openai-codex; model=gpt-6-sol ;;
     sol61) provider=openai-codex; model=gpt-6.1-sol ;;
+    terra61) provider=openai-codex; model=gpt-6.1-terra ;;
     v4|deepseek)         provider=deepseek-official; model=deepseek-v4-flash-vision-exp ;;
     v4-pro|deepseek-pro) provider=deepseek-official; model=deepseek-v4-pro ;;
     deepseek-*)          provider=deepseek-official; model="$route" ;;
@@ -135,21 +136,22 @@ if [ -r "$CATALOG" ]; then
 import json, sys
 ids = sorted({(e.get("id") if isinstance(e, dict) and e.get("id") else k)
                for v in json.load(open(sys.argv[1])).values() for k, e in v.items()})
-extra = [m for m in ("gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol") if m not in ids]
+extra = [m for m in ("gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-terra") if m not in ids]
 if not extra:
     sys.exit(0)
 for i in ids:
     print(f"          - id: {i}")
 efforts = {"off": "none", "minimal": "low", "low": "low", "medium": "medium",
            "high": "high", "xhigh": "xhigh", "max": "max"}
-# gpt-6.1-sol's catalogue map has `off: null`: no "none" effort to offer.
+# gpt-6.1-sol's catalogue map has `off: null`, and gpt-6.1-terra (hand-declared, terra map) has no
+# `off` either: no "none" effort to offer.
 no_off = {k: v for k, v in efforts.items() if k != "off"}
 for m in extra:
     print(f"          - id: {m}")
     print("            contextWindow: 272000")
     print("            maxTokens: 128000")
     print("            input: [text, image]")
-    print("            reasoningEfforts: " + json.dumps(no_off if m == "gpt-6.1-sol" else efforts))
+    print("            reasoningEfforts: " + json.dumps(no_off if m in ("gpt-6.1-sol", "gpt-6.1-terra") else efforts))
 PY
 )
 fi
