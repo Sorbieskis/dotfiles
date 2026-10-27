@@ -65,12 +65,12 @@ class Fixture(unittest.TestCase):
             ev["agent_type"] = agent_type
         return json.dumps(ev)
 
-    def assertAllowed(self, stdin):
-        rc, out, _ = run(stdin)
+    def assertAllowed(self, stdin, enforce=True):
+        rc, out, _ = run(stdin, enforce=enforce)
         self.assertEqual((rc, out), (0, ""))
 
-    def assertDenied(self, stdin, reason):
-        rc, out, _ = run(stdin)
+    def assertDenied(self, stdin, reason, enforce=True):
+        rc, out, _ = run(stdin, enforce=enforce)
         self.assertEqual(rc, 0)
         d = json.loads(out)["hookSpecificOutput"]
         self.assertEqual(d["permissionDecision"], "deny")
@@ -82,15 +82,32 @@ class SubagentContextLimit(Fixture):
         self.sub("A1", 150_000)
         self.assertAllowed(self.event("Bash", command="ls"))
 
-    def test_haiku_is_not_stopped_at_100k_but_shares_the_190k_line(self):
-        self.sub("A1", 120_000, model="claude-haiku-5-5")
-        self.assertAllowed(self.event("Bash", command="ls"))
-        self.sub("A2", 200_000, model="claude-haiku-5-5")
-        self.assertDenied(self.event("Bash", aid="A2", command="ls"), SOFT.format(n=200, m=190))
+    def test_haiku_at_96k_denied_without_env_var(self):
+        # (a) always-on Haiku cap: soft 95k, no env var needed
+        self.sub("A1", 96_000, model="claude-haiku-5-5")
+        self.assertDenied(self.event("Bash", aid="A1", command="ls"), SOFT.format(n=96, m=95), enforce=False)
 
-    def test_haiku_by_agent_type_not_stopped_at_120k(self):
-        self.sub("A3", 120_000)
-        self.assertAllowed(self.event("Bash", aid="A3", agent_type="haiku-scout", command="ls"))
+    def test_haiku_at_96k_may_still_commit_and_write_report(self):
+        # (b) over soft: git housekeeping and report.md writes stay allowed
+        self.sub("A1", 96_000, model="claude-haiku-5-5")
+        self.assertAllowed(self.event("Bash", aid="A1", command="git add x && git commit -m m"), enforce=False)
+        self.assertAllowed(self.event("Write", aid="A1", file_path="/tmp/x/report.md", content="r"), enforce=False)
+
+    def test_haiku_at_106k_denies_push_allows_commit(self):
+        # (c) over hard 105k: only git add/commit
+        self.sub("A1", 106_000, model="claude-haiku-5-5")
+        self.assertDenied(self.event("Bash", aid="A1", command="git push"), HARD.format(n=106, m=105), enforce=False)
+        self.assertAllowed(self.event("Bash", aid="A1", command="git commit -m m"), enforce=False)
+
+    def test_non_haiku_at_96k_not_denied_without_env_var(self):
+        # (d) the 95k cap is Haiku-only; other models stay opt-in at 190k
+        self.sub("A1", 96_000, model="inherit")
+        self.assertAllowed(self.event("Bash", aid="A1", command="ls"), enforce=False)
+
+    def test_haiku_by_agent_type_capped_at_95k(self):
+        self.sub("A3", 96_000)
+        self.assertDenied(self.event("Bash", aid="A3", agent_type="haiku-scout", command="ls"),
+                          SOFT.format(n=96, m=95), enforce=False)
 
     def test_enforcement_is_inert_without_the_env_var(self):
         self.sub("A1", 200_000)
@@ -212,7 +229,7 @@ class SubagentContextLimit(Fixture):
 
 class SpawnerNotice(Fixture):
     def main_call(self):
-        return run(self.event("Bash", aid=None, command="ls"), enforce=False)
+        return run(self.event("Bash", aid=None, command="git status"), enforce=False)
 
     def notice_lines(self, out):
         if not out:
@@ -223,50 +240,50 @@ class SpawnerNotice(Fixture):
 
     def test_crossing_notifies_once_then_silent(self):
         self.sub("A1", 104_000, model="claude-haiku-5-5", desc="build the thing")
-        rc, out, _ = run(self.event("Bash", command="ls"), enforce=False)  # the subagent's own call
+        rc, out, _ = run(self.event("Bash", command="git status"), enforce=False)  # the subagent's own call
         self.assertEqual((rc, out), (0, ""))  # a subagent is told nothing
         rc, out, _ = self.main_call()
         self.assertEqual(self.notice_lines(out),
                          ['subagent "build the thing" (claude-haiku-5-5) is at ~104k context (crossed 90k)'])
         self.assertEqual(self.main_call()[1], "")  # never repeated
-        run(self.event("Bash", command="ls"), enforce=False)  # the subagent calls again at the same size
+        run(self.event("Bash", command="git status"), enforce=False)  # the subagent calls again at the same size
         self.assertEqual(self.main_call()[1], "")
 
     def test_second_line_is_a_second_notice(self):
         self.sub("A1", 104_000, model="haiku", desc="d")
-        run(self.event("Bash", command="ls"), enforce=False)
+        run(self.event("Bash", command="git status"), enforce=False)
         self.main_call()
         self.sub("A1", 195_000, model="haiku", desc="d")
-        run(self.event("Bash", command="ls"), enforce=False)
+        run(self.event("Bash", command="git status"), enforce=False)
         lines = self.notice_lines(self.main_call()[1])
         self.assertEqual(len(lines), 1)
         self.assertIn("crossed 190k", lines[0])
 
     def test_haiku_first_line_is_90k(self):
         self.sub("A1", 89_000, model="haiku")
-        run(self.event("Bash", command="ls"), enforce=False)
+        run(self.event("Bash", command="git status"), enforce=False)
         self.assertEqual(self.main_call()[1], "")
         self.sub("A1", 91_000, model="haiku")
-        run(self.event("Bash", command="ls"), enforce=False)
+        run(self.event("Bash", command="git status"), enforce=False)
         self.assertIn("crossed 90k", self.main_call()[1])
 
     def test_non_haiku_first_line_is_150k(self):
         self.sub("A1", 120_000, model="inherit")
-        run(self.event("Bash", command="ls"), enforce=False)
+        run(self.event("Bash", command="git status"), enforce=False)
         self.assertEqual(self.main_call()[1], "")
         self.sub("A1", 155_000, model="inherit")
-        run(self.event("Bash", command="ls"), enforce=False)
+        run(self.event("Bash", command="git status"), enforce=False)
         self.assertIn("crossed 150k", self.main_call()[1])
 
     def test_main_call_with_nothing_pending_is_silent(self):
         self.assertEqual(self.main_call()[1:], ("", ""))
         self.sub("A1", 50_000, model="haiku")
-        run(self.event("Bash", command="ls"), enforce=False)
+        run(self.event("Bash", command="git status"), enforce=False)
         self.assertEqual(self.main_call()[1], "")
 
     def test_notice_goes_to_the_spawning_session_only(self):
         self.sub("A1", 104_000, model="haiku")
-        run(self.event("Bash", command="ls"), enforce=False)
+        run(self.event("Bash", command="git status"), enforce=False)
         other = json.loads(self.event("Bash", aid=None, command="ls"))
         other["session_id"] = "other"
         self.assertEqual(run(json.dumps(other), enforce=False)[1], "")
@@ -274,7 +291,7 @@ class SpawnerNotice(Fixture):
 
     def test_finished_agent_is_cleaned_up(self):
         self.sub("A1", 104_000, model="haiku")
-        run(self.event("Bash", command="ls"), enforce=False)
+        run(self.event("Bash", command="git status"), enforce=False)
         stop = json.dumps({"hook_event_name": "SubagentStop", "session_id": "sess", "agent_id": "A1"})
         run(stop, enforce=False)  # stops with its notice undelivered: kept, flagged finished
         self.assertIn("crossed 90k", self.main_call()[1])
@@ -287,16 +304,16 @@ class SpawnerNotice(Fixture):
     def test_finished_agent_with_nothing_pending_is_retired_from_state(self):
         self.sub("A1", 104_000, model="haiku")
         self.sub("A2", 104_000, model="haiku")
-        run(self.event("Bash", aid="A1", command="ls"), enforce=False)
+        run(self.event("Bash", aid="A1", command="git status"), enforce=False)
         self.main_call()  # delivers A1's notice: nothing pending
-        run(self.event("Bash", aid="A2", command="ls"), enforce=False)  # keeps the state file alive
+        run(self.event("Bash", aid="A2", command="git status"), enforce=False)  # keeps the state file alive
         self.assertEqual(self.state_agents(), ["A1", "A2"])
         run(json.dumps({"hook_event_name": "SubagentStop", "session_id": "sess", "agent_id": "A1"}), enforce=False)
         self.assertEqual(self.state_agents(), ["A2"])
 
     def test_main_call_with_nothing_pending_does_not_rewrite_state(self):
         self.sub("A1", 104_000, model="haiku")
-        run(self.event("Bash", command="ls"), enforce=False)
+        run(self.event("Bash", command="git status"), enforce=False)
         self.main_call()
         f = os.path.join(STATE["dir"], "sess.json")
         os.utime(f, (1, 1))
@@ -305,7 +322,7 @@ class SpawnerNotice(Fixture):
 
     def test_state_dir_is_private(self):
         self.sub("A1", 104_000, model="haiku")
-        run(self.event("Bash", command="ls"), enforce=False)
+        run(self.event("Bash", command="git status"), enforce=False)
         self.assertEqual(os.stat(STATE["dir"]).st_mode & 0o777, 0o700)
 
     def test_stale_sweep_removes_the_lock_with_its_state(self):
@@ -335,7 +352,7 @@ class SpawnerNotice(Fixture):
         self.sub("A1", 104_000, model="haiku")
         os.makedirs(STATE["dir"], exist_ok=True)
         open(os.path.join(STATE["dir"], "DISABLE"), "w").close()
-        run(self.event("Bash", command="ls"), enforce=False)
+        run(self.event("Bash", command="git status"), enforce=False)
         self.assertEqual(self.main_call()[1], "")
 
 

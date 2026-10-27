@@ -10,9 +10,10 @@ Two jobs, both keyed on a subagent's context = its own transcript's last assista
    gets one additionalContext line per crossing, information only. SubagentStop retires the
    agent's entry once its notices are delivered. `touch ~/.cache/subagent-ctx/DISABLE` turns the
    whole hook off.
-2. ENFORCEMENT (off unless CLAUDE_SUBAGENT_LIMIT_ENFORCE=1): over the soft limit (190k, every
-   model; enforcement never stops a Haiku earlier: founder 2026-10-12) only the allowlist below runs;
-   at the hard limit (300k) every tool is denied.
+2. ENFORCEMENT: Haiku subagents always (HAIKU_LIMITS: soft 95k, hard 105k, founder 2026-10-27).
+   Every other model only with CLAUDE_SUBAGENT_LIMIT_ENFORCE=1 (LIMITS: soft 190k, hard 300k). Over
+   the soft limit only the allowlist below runs; at the hard limit every tool is denied except git
+   add/commit (Haiku's hard tier is the same).
 Any error or unreadable input allows the call (fail open).
 Recipe and evidence: ~/lab/2026-10-loop-mods/part3-context-hook-probe.md, part5-spawner-notice-probe.md.
 """
@@ -23,8 +24,11 @@ import re
 import sys
 import tempfile
 
-# Enforcement thresholds, in tokens (only with CLAUDE_SUBAGENT_LIMIT_ENFORCE=1).
+# Enforcement thresholds, in tokens (non-Haiku only, with CLAUDE_SUBAGENT_LIMIT_ENFORCE=1).
 LIMITS = {"soft": 190_000, "hard": 300_000}
+# Haiku is capped always, env var or not. Its price jumps 5x above 100k context (founder 2026-10-27);
+# 95k soft and 105k hard leave room to commit and write the report before the price jump.
+HAIKU_LIMITS = {"soft": 95_000, "hard": 105_000}
 # Notice lines, in tokens: informational only, per model class.
 NOTICE_LINES = {"haiku": (90_000, 190_000), "other": (150_000, 190_000)}
 ENFORCE_ENV = "CLAUDE_SUBAGENT_LIMIT_ENFORCE"
@@ -373,16 +377,19 @@ def decide(ev):
     if ctx is None:
         return None
     record_crossings(ev, aid, ctx, base)
-    if os.environ.get(ENFORCE_ENV) != "1":
+    _, model = agent_meta(base + ".meta.json")
+    haiku = is_haiku(model, ev.get("agent_type"))
+    if not haiku and os.environ.get(ENFORCE_ENV) != "1":
         return None
-    if ctx >= LIMITS["hard"]:
+    limits = HAIKU_LIMITS if haiku else LIMITS
+    if ctx >= limits["hard"]:
         ti = ev.get("tool_input") or {}
         if ev.get("tool_name") == "Bash" and bash_allowed(ti.get("command", ""), GIT_HARD):
             return None
-        return deny(HARD_REASON.format(n=ctx // 1000, m=LIMITS["hard"] // 1000))
-    if ctx < LIMITS["soft"] or allowed_over_soft(ev):
+        return deny(HARD_REASON.format(n=ctx // 1000, m=limits["hard"] // 1000))
+    if ctx < limits["soft"] or allowed_over_soft(ev):
         return None
-    return deny(SOFT_REASON.format(n=ctx // 1000, m=LIMITS["soft"] // 1000))
+    return deny(SOFT_REASON.format(n=ctx // 1000, m=limits["soft"] // 1000))
 
 
 def main():
