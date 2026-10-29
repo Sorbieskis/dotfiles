@@ -90,7 +90,7 @@ def agent_meta(meta_path):
         return "", ""
 
 
-HAIKU_CAP_OFF = os.path.expanduser("~/.claude/haiku-cap-off")
+HAIKU_CAP_OFF = os.environ.get("CLAUDE_HAIKU_CAP_OFF_FILE") or os.path.expanduser("~/.claude/haiku-cap-off")
 
 
 def haiku_cap_off(now=None):

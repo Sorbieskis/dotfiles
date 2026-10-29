@@ -21,6 +21,7 @@ STATE = {"dir": None}
 def run(stdin, enforce=True):
     env = {k: v for k, v in os.environ.items() if k != "CLAUDE_SUBAGENT_LIMIT_ENFORCE"}
     env["SUBAGENT_CTX_STATE_DIR"] = STATE["dir"]
+    env["CLAUDE_HAIKU_CAP_OFF_FILE"] = os.path.join(STATE["dir"], "no-such-cap-off")
     if enforce:
         env["CLAUDE_SUBAGENT_LIMIT_ENFORCE"] = "1"
     p = subprocess.run([sys.executable, "-I", HOOK], input=stdin, capture_output=True, text=True, env=env)
