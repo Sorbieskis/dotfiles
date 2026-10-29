@@ -23,6 +23,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 
 # Enforcement thresholds, in tokens (non-Haiku only, with CLAUDE_SUBAGENT_LIMIT_ENFORCE=1).
 LIMITS = {"soft": 190_000, "hard": 300_000}
@@ -87,6 +88,19 @@ def agent_meta(meta_path):
         return str(meta.get("description") or ""), str(meta.get("model") or meta.get("agentType") or "")
     except Exception:
         return "", ""
+
+
+HAIKU_CAP_OFF = os.path.expanduser("~/.claude/haiku-cap-off")
+
+
+def haiku_cap_off(now=None):
+    """dima 2026-10-29: Haiku may run past 100k while ~/.claude/haiku-cap-off holds a future epoch time;
+    it then gets the other models' LIMITS (soft 190k, hard 300k) as the safety net."""
+    try:
+        until = float(open(HAIKU_CAP_OFF).read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return False
+    return (now if now is not None else time.time()) < until
 
 
 def is_haiku(model, agent_type):
@@ -381,7 +395,7 @@ def decide(ev):
     haiku = is_haiku(model, ev.get("agent_type"))
     if not haiku and os.environ.get(ENFORCE_ENV) != "1":
         return None
-    limits = HAIKU_LIMITS if haiku else LIMITS
+    limits = HAIKU_LIMITS if haiku and not haiku_cap_off() else LIMITS
     if ctx >= limits["hard"]:
         ti = ev.get("tool_input") or {}
         if ev.get("tool_name") == "Bash" and bash_allowed(ti.get("command", ""), GIT_HARD):
