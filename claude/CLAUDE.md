@@ -24,6 +24,9 @@ Public 22 is closed (UFW) and filtered (netcup SCP policy `osnova-vps`, 2026-09-
   anything host- or stack-related. Never edit `/opt/stacks` directly: edit the
   repo, push, deploy via `./scripts/deploy.sh <service>`. A weekly drift check
   pings ntfy if `/opt/stacks` diverges from the repo.
+- Forgejo API calls (create/archive a repo, …): a temporary token minted with the
+  Forgejo CLI and deleted right after, nothing kept on the box (decided 2026-10-31).
+  Recipe: osnova-infra CLAUDE.md, "Common workflows".
 
 ## Dev workflow
 
