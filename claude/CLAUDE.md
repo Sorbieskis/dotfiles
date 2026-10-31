@@ -33,10 +33,12 @@ Public 22 is closed (UFW) and filtered (netcup SCP policy `osnova-vps`, 2026-09-
   Agents never add a tab while no client is attached: on zellij 0.45.1 that makes the next attach
   panic the whole session (osnova died this way 2026-10-14 and -15); the hook
   (`claude/hooks/zellij-no-new-tab.py`) allows new-tab only while `list-clients` shows a client.
-  Orchestrators run in an `osnova` tab (founder 2026-10-15): unattended, reuse an existing idle tab
-  by pane id (`action list-panes -t -c` → `action write-chars -p terminal_N …`), then name it after
-  the new seat with `action rename-tab-by-id <TAB_ID> <name>` (plain `rename-tab` only hits the focused
-  tab); with no client attached, `go-to-tab-name` and a plain `write-chars` silently do nothing (tested 2026-10-15). `zj-spawn <new-session> <cwd> <cmd…>` is for other long-running panes.
+  A successor orchestrator opens as a new tab in its predecessor's own zellij session (founder 2026-10-31):
+  `zellij -s <s> action new-tab --name <seat> --cwd <dir>`, only while `action list-clients` shows a client; start it
+  by pane id (`action list-panes -t -c` → `action write-chars -p terminal_N …` + `action write -p terminal_N 13`),
+  with the prompt in a file and a launch script (fish reads `(…)` in an inline prompt as a command). No client
+  attached: reuse an idle tab there by pane id, else `zj-spawn <new-session> <cwd> <cmd…>`. Unattended, plain
+  `rename-tab`, `go-to-tab-name` and `write-chars` without `-p` silently do nothing (tested 2026-10-15).
   Persistent session `main`: `zellij attach main`, never bare `zellij` (creates
   strays). Recreated at boot by the user unit `zellij-main.service`.
 - RAM: 32 GB. EVERY zellij session runs inside the user slice `zellij.slice`

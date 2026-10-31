@@ -2,7 +2,8 @@
 # zj-spawn <session> <cwd> <command...>
 #
 # Start <command> in a NEW detached zellij session, from a clean login env.
-# The only sanctioned way for an agent to open a new long-running pane (e.g. a successor orchestrator).
+# The sanctioned way for an agent to open a long-running pane when no client is attached; with one attached, a
+# successor orchestrator opens as a new tab in its predecessor's session instead (~/.claude/CLAUDE.md, founder 2026-10-31).
 #
 # Why not `zellij -s <s> action new-tab`: on zellij 0.45.1, new-tab on a session with NO client attached
 # leaves a broken tab, and the next client attach panics the whole server ("failed to attach client N to
