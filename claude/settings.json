@@ -19,7 +19,6 @@
       "Bash(git push --force-if-includes*)",
       "Bash(git push -f *)",
       "Bash(git * --no-verify*)",
-      "Write(/opt/stacks/**)",
       "Edit(/opt/stacks/**)",
       "Bash(sudo ufw *)",
       "Bash(ufw *)",
