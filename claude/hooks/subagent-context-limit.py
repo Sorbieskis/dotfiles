@@ -14,7 +14,7 @@ Two jobs, both keyed on a subagent's context = its own transcript's last assista
    Every other model only with CLAUDE_SUBAGENT_LIMIT_ENFORCE=1 (LIMITS: soft 190k, hard 300k). Over
    the soft limit only the allowlist below runs; at the hard limit every tool is denied except git
    add/commit (Haiku's hard tier is the same). A headless main session started with
-   CLAUDE_HAIKU_MAIN_CAP=1 (haiku-run.sh tries) gets HAIKU_MAIN_LIMITS (soft 150k, hard 165k) on its own context, and may
+   CLAUDE_HAIKU_MAIN_CAP=1 (haiku-run.sh tries) gets HAIKU_MAIN_LIMITS (soft 185k, hard 200k) on its own context, and may
    write its DONE.md over the soft limit.
 Any error or unreadable input allows the call (fail open).
 Recipe and evidence: ~/lab/2026-10-loop-mods/part3-context-hook-probe.md, part5-spawner-notice-probe.md.
@@ -32,8 +32,8 @@ LIMITS = {"soft": 190_000, "hard": 300_000}
 # Haiku is capped always, env var or not. Its price jumps 5x above 100k context (founder 2026-10-27);
 # 95k soft and 105k hard leave room to commit and write the report before the price jump.
 HAIKU_LIMITS = {"soft": 95_000, "hard": 105_000}
-# Headless Haiku tries (MAIN_CAP_ENV) start at ~45k of fixed context; 95k left them ~15 turns (dima 2026-11-02: raise it).
-HAIKU_MAIN_LIMITS = {"soft": 150_000, "hard": 165_000}
+# Headless Haiku tries (MAIN_CAP_ENV) start at ~45k of fixed context; 95k left them ~15 turns, 165k still ran out on J20 (dima 2026-11-02: up to 200k).
+HAIKU_MAIN_LIMITS = {"soft": 185_000, "hard": 200_000}
 # Notice lines, in tokens: informational only, per model class.
 NOTICE_LINES = {"haiku": (90_000, 190_000), "other": (150_000, 190_000)}
 ENFORCE_ENV = "CLAUDE_SUBAGENT_LIMIT_ENFORCE"
