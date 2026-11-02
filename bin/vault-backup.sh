@@ -13,11 +13,17 @@
 # by --gitleaks-ignore-path, so its presence (work tree or main's tree) holds the push
 # (exit 126). Commit messages are scanned too (stdin), and archives to depth 4. The binary is the exact mise pin, not a glob or
 # `latest`: bump it here together with ~/.dotfiles/mise/config.toml.
-# Test hooks (env): VAULT_DIR, GITLEAKS_BIN, NTFY_CMD (receives the message as $1).
+# The doc lint (the vault's pre-commit hook) is ADVISORY: it runs once on the staged snapshot under
+# `timeout --kill-after=5 ${VAULT_LINT_TIMEOUT:-60}` (so a hung or TERM-ignoring lint costs at most that
+# plus 5 s), a non-zero exit (124/137 = timed out) is logged, and it never holds the backup. The backup
+# commit uses --no-verify, so the hook never runs inside `git commit`, and the snapshot is staged again
+# after the lint, so a lint that touches the index cannot change what is backed up.
+# Test hooks (env): VAULT_DIR, GITLEAKS_BIN, GITLEAKS_CONFIG, NTFY_CMD (receives the message as $1),
+# VAULT_LINT_CMD, VAULT_LINT_TIMEOUT.
 set -euo pipefail
 VAULT_DIR=${VAULT_DIR:-/home/dima/vault}
 GITLEAKS_BIN=${GITLEAKS_BIN:-/home/dima/.local/share/mise/installs/aqua-gitleaks-gitleaks/8.30.1/gitleaks}
-GITLEAKS_CONFIG=/home/dima/.dotfiles/vault/gitleaks.toml
+GITLEAKS_CONFIG=${GITLEAKS_CONFIG:-/home/dima/.dotfiles/vault/gitleaks.toml}
 cd "$VAULT_DIR"
 
 notify() {
@@ -31,7 +37,15 @@ git pull --rebase --autostash origin main >/dev/null 2>&1 || true
 
 if [ -n "$(git status --porcelain)" ]; then
     git add -A
-    git commit -q -m "backup: vault snapshot $(date '+%Y-%m-%d %H:%M')"
+    if ! git diff --cached --quiet; then
+        lint_rc=0
+        timeout --kill-after=5 "${VAULT_LINT_TIMEOUT:-60}" "${VAULT_LINT_CMD:-$VAULT_DIR/.git/hooks/pre-commit}" </dev/null 2>&1 || lint_rc=$?
+        if [ "$lint_rc" -ne 0 ]; then
+            echo "$(date '+%F %T') vault-backup: doc lint advisory: exit $lint_rc (not holding the backup)"
+        fi
+        git add -A
+    fi
+    git commit -q --no-verify -m "backup: vault snapshot $(date '+%Y-%m-%d %H:%M')"
 fi
 
 # Scan what `git push origin main` sends; with no upstream ref that is all of main.

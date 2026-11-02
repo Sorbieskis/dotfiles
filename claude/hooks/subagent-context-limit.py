@@ -13,7 +13,9 @@ Two jobs, both keyed on a subagent's context = its own transcript's last assista
 2. ENFORCEMENT: Haiku subagents always (HAIKU_LIMITS: soft 95k, hard 105k, founder 2026-10-27).
    Every other model only with CLAUDE_SUBAGENT_LIMIT_ENFORCE=1 (LIMITS: soft 190k, hard 300k). Over
    the soft limit only the allowlist below runs; at the hard limit every tool is denied except git
-   add/commit (Haiku's hard tier is the same).
+   add/commit (Haiku's hard tier is the same). A headless main session started with
+   CLAUDE_HAIKU_MAIN_CAP=1 (haiku-run.sh tries) gets the Haiku caps on its own context, and may
+   write its DONE.md over the soft limit.
 Any error or unreadable input allows the call (fail open).
 Recipe and evidence: ~/lab/2026-10-loop-mods/part3-context-hook-probe.md, part5-spawner-notice-probe.md.
 """
@@ -33,6 +35,7 @@ HAIKU_LIMITS = {"soft": 95_000, "hard": 105_000}
 # Notice lines, in tokens: informational only, per model class.
 NOTICE_LINES = {"haiku": (90_000, 190_000), "other": (150_000, 190_000)}
 ENFORCE_ENV = "CLAUDE_SUBAGENT_LIMIT_ENFORCE"
+MAIN_CAP_ENV = "CLAUDE_HAIKU_MAIN_CAP"  # set by haiku-run.sh: a headless Haiku try's own context gets the Haiku caps
 STALE_SECS = 3 * 24 * 3600  # state files of dead sessions
 
 # Allowed over the soft limit: git housekeeping (every segment of a chained command must pass
@@ -43,6 +46,7 @@ PUSH_OPTS = {"-u", "--set-upstream", "--tags", "--follow-tags", "-q", "--quiet",
              "--dry-run", "-n"}
 COMMIT_OPTS = {"-m", "-a", "-am", "--amend", "--no-edit", "-s", "-q", "--allow-empty", "-F", "--no-verify"}
 REPORT_BASENAME = re.compile(r"^(report|handoff|notes)[A-Za-z0-9_.-]*\.md$", re.I)
+DONE_BASENAME = re.compile(r".*DONE\.md$")  # a headless try's answer file: over soft on main-cap seats only
 HEREDOC = re.compile(r"\$\(\s*cat\s+<<-?\s*(['\"])(\w+)\1[ \t]*\n")
 
 
@@ -351,26 +355,27 @@ def bash_allowed(cmd, subs):
     return True
 
 
-def report_path_ok(path, cwd):
+def report_path_ok(path, cwd, names=REPORT_BASENAME):
     if not isinstance(path, str) or not path:
         return False
     home = os.path.expanduser("~")
     if not os.path.isabs(path):
         path = os.path.join(cwd or os.getcwd(), path)
     path = os.path.normpath(path)
-    if not REPORT_BASENAME.match(os.path.basename(path)):
+    if not names.match(os.path.basename(path)):
         return False
     roots = [cwd or os.getcwd(), os.path.join(home, "lab"), os.path.join(home, "drop"), tempfile.gettempdir(), "/tmp"]
     return any(r and path.startswith(os.path.normpath(r).rstrip("/") + "/") for r in roots)
 
 
-def allowed_over_soft(ev):
+def allowed_over_soft(ev, main_seat=False):
     tool = ev.get("tool_name")
     ti = ev.get("tool_input") or {}
     if tool == "Bash":
         return bash_allowed(ti.get("command", ""), GIT_SOFT)
     if tool in ("Write", "Edit"):
-        return report_path_ok(ti.get("file_path"), ev.get("cwd"))
+        path, cwd = ti.get("file_path"), ev.get("cwd")
+        return report_path_ok(path, cwd) or (main_seat and report_path_ok(path, cwd, DONE_BASENAME))
     return False
 
 
@@ -379,10 +384,30 @@ def deny(reason):
                                    "permissionDecisionReason": reason}}
 
 
+def cap_verdict(ev, ctx, limits, main_seat=False):
+    """The soft and hard tiers for one seat at context ctx: None allows the call, a deny refuses it."""
+    if ctx >= limits["hard"]:
+        ti = ev.get("tool_input") or {}
+        if ev.get("tool_name") == "Bash" and bash_allowed(ti.get("command", ""), GIT_HARD):
+            return None
+        return deny(HARD_REASON.format(n=ctx // 1000, m=limits["hard"] // 1000))
+    if ctx < limits["soft"] or allowed_over_soft(ev, main_seat):
+        return None
+    return deny(SOFT_REASON.format(n=ctx // 1000, m=limits["soft"] // 1000))
+
+
 def decide(ev):
     aid = ev.get("agent_id")
     if not aid:
-        return pending_notices(ev)  # main session: the context-band mod covers its own size
+        # main session: the context-band mod covers its own size, except a headless Haiku try (MAIN_CAP_ENV)
+        tp = ev.get("transcript_path")
+        if os.environ.get(MAIN_CAP_ENV) != "1" or not isinstance(tp, str):
+            return pending_notices(ev)
+        ctx = context_tokens(tp)
+        if ctx is None:
+            return pending_notices(ev)
+        limits = LIMITS if haiku_cap_off() else HAIKU_LIMITS
+        return cap_verdict(ev, ctx, limits, main_seat=True) or pending_notices(ev)
     tp = ev.get("transcript_path")
     if not isinstance(tp, str) or not tp.endswith(".jsonl"):
         return None
@@ -395,15 +420,7 @@ def decide(ev):
     haiku = is_haiku(model, ev.get("agent_type"))
     if not haiku and os.environ.get(ENFORCE_ENV) != "1":
         return None
-    limits = HAIKU_LIMITS if haiku and not haiku_cap_off() else LIMITS
-    if ctx >= limits["hard"]:
-        ti = ev.get("tool_input") or {}
-        if ev.get("tool_name") == "Bash" and bash_allowed(ti.get("command", ""), GIT_HARD):
-            return None
-        return deny(HARD_REASON.format(n=ctx // 1000, m=limits["hard"] // 1000))
-    if ctx < limits["soft"] or allowed_over_soft(ev):
-        return None
-    return deny(SOFT_REASON.format(n=ctx // 1000, m=limits["soft"] // 1000))
+    return cap_verdict(ev, ctx, HAIKU_LIMITS if haiku and not haiku_cap_off() else LIMITS)
 
 
 def main():
