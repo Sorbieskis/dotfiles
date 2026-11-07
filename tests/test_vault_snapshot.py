@@ -150,6 +150,64 @@ class MachineOutputTests(Base):
         self.assertEqual(self.published(), set(keep))
 
 
+class PersonalNameTests(Base):
+    """Founder item 5, orch6 ruling on I10: exclusion by path SEGMENT at any depth, case-insensitive, NFC."""
+
+    def test_a_segment_that_starts_with_belle_contains_financ_or_equals_a_personal_name_is_out_at_any_depth(self):
+        drop = [
+            "1_projects/belle_masters_2027/a.md",       # starts with belle
+            "1_projects/p/Belle-notes/b.md",            # nested, case variant
+            "1_projects/p/BELLE.md",                    # file name
+            "2_areas/finances/c.md",                    # contains financ (directory)
+            "1_projects/schk_software/finance/d.md",    # nested
+            "1_projects/p/q-Financials-2026/e.md",      # contains, not at the start
+            "1_projects/p/my finances.md",              # contains financ (file name)
+            "2_areas/x/journal/f.md",                   # equals journal
+            "2_areas/x/Journal.md",                     # file name equals journal (+ .md), case variant
+            "1_projects/p/personal/g.md",               # equals personal
+            "4_resources/3_personal/h.md",              # nested 3_personal
+            "1_projects/p/5_archive/i.md",              # nested 5_archive
+        ]
+        keep = [
+            "1_projects/p/engineering/plans/m1.md",     # an ordinary note
+            "1_projects/p/bell.md",                     # bell is not belle
+            "1_projects/p/journalism/k.md",             # journal only as a whole segment
+            "1_projects/p/personalised/l.md",           # personal only as a whole segment
+            "2_areas/x/archive/m.md",                   # 5_archive only exactly
+            "4_resources/n.md",
+        ]
+        for rel in drop + keep:
+            self.put(rel)
+        self.commit()
+        r = self.run_snapshot()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.published(), set(keep))
+        with open(os.path.join(self.current(), "SNAPSHOT.md")) as f:
+            stamp = f.read()
+        self.assertIn(f"personal-name {len(drop)}", stamp)
+        self.assertRegex(stamp, rf"(?m)^dropped: {len(drop)}$")
+
+    def test_composed_and_decomposed_spellings_of_the_same_name_are_treated_alike(self):
+        # NFC first: "Bell" + e + combining acute is "Bell\u00e9", which does not start with "belle" in either spelling
+        self.put("1_projects/p/Bell\u00e9/a.md")
+        self.put("1_projects/p/Bell\u0065\u0301/b.md")
+        self.commit()
+        self.assertEqual(self.run_snapshot().returncode, 0)
+        self.assertEqual(self.published(), {"1_projects/p/Bell\u00e9/a.md", "1_projects/p/Bell\u0065\u0301/b.md"})
+
+    def test_a_file_over_5_mb_is_not_published_and_is_counted_oversize(self):  # I11
+        self.put("1_projects/p/ok.md")
+        self.put("1_projects/p/exact.md", "x" * 5_000_000)
+        self.put("1_projects/p/big.md", "x" * 5_000_001)
+        self.commit()
+        self.assertEqual(self.run_snapshot().returncode, 0)
+        self.assertEqual(self.published(), {"1_projects/p/ok.md", "1_projects/p/exact.md"})
+        with open(os.path.join(self.current(), "SNAPSHOT.md")) as f:
+            stamp = f.read()
+        self.assertIn("oversize 1,", stamp)
+        self.assertRegex(stamp, r"(?m)^dropped: 1$")
+
+
 class PushedOnlyTests(Base):
     def test_only_origin_main_is_published_never_local_commits_or_the_work_tree(self):
         self.put("1_projects/p/pushed.md", "v1 pushed\n")

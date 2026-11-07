@@ -9,8 +9,10 @@ The vault-door container mounts $SNAPSHOT_DIR read-only at /snapshot; its two re
 What is published (founder item 5): `*.md` files under 1_projects/, 2_areas/, 4_resources/ from
 `git archive refs/remotes/origin/main` (pushed content only: no work tree, no local commits), minus
 symlinks, hidden files/folders, machine output (1_projects/*/{pull-log,landings,engineering/jobs,
-engineering/seat}/**, 1_projects/*/agent-ledger*) and every file `gitleaks dir` flags. 0_inbox/,
-3_personal/, belle/, journal/, 5_archive/ and everything else are never extracted.
+engineering/seat}/**, 1_projects/*/agent-ledger*), every path `personal_name` excludes (any segment, any
+depth: starts with `belle`, contains `financ`, equals `journal`/`personal`/`3_personal`/`5_archive`;
+orch6 ruling 2026-11-07 on I10) and every file `gitleaks dir` flags. 0_inbox/, 3_personal/, belle/,
+journal/, 5_archive/ and everything else outside the three folders are never extracted.
 
 FAIL CLOSED: a gitleaks hit that cannot be dropped, a missing binary or config, any gitleaks error
 (exit 1 without a readable report is an error, not a hit) or a failed archive publishes nothing and
@@ -29,6 +31,7 @@ import subprocess
 import sys
 import tarfile
 import time
+import unicodedata
 
 HOME = os.path.expanduser("~")
 VAULT = os.environ.get("VAULT_DIR", os.path.join(HOME, "vault"))
@@ -38,6 +41,7 @@ CONFIG = os.environ.get("GITLEAKS_CONFIG", os.path.join(HOME, ".dotfiles/vault/g
 REF = "refs/remotes/origin/main"
 ALLOW = ("1_projects", "2_areas", "4_resources")
 MAX_FILE = 5_000_000
+PERSONAL = ("journal", "personal", "3_personal", "5_archive")
 
 
 class Fail(Exception):
@@ -59,9 +63,23 @@ def machine_output(parts):
     return parts[2] == "engineering" and len(parts) > 4 and parts[3] in ("jobs", "seat")
 
 
+def personal_name(parts):
+    """The ONE exclusion rule (founder item 5, orch6 ruling on I10): a path is out if ANY directory or
+    file-name segment, case-insensitive after Unicode NFC, starts with `belle`, contains `financ`, or
+    equals `journal`, `personal`, `3_personal` or `5_archive` (a file name is also compared without
+    its `.md`, so `Journal.md` is out)."""
+    for p in parts:
+        s = unicodedata.normalize("NFC", p).casefold()
+        if s.startswith("belle") or "financ" in s:
+            return True
+        if s in PERSONAL or s.removesuffix(".md") in PERSONAL:
+            return True
+    return False
+
+
 def extract(proc, dest):
     """Stream the archive; write only wanted regular files. Returns counters."""
-    n = dict(files=0, machine=0, hidden=0, symlink=0, oversize=0)
+    n = dict(files=0, machine=0, hidden=0, symlink=0, oversize=0, personal=0)
     tar = tarfile.open(fileobj=proc.stdout, mode="r|")
     for m in tar:
         name = m.name.lstrip("./") if m.name.startswith("./") else m.name
@@ -78,6 +96,9 @@ def extract(proc, dest):
             continue
         if machine_output(parts):
             n["machine"] += 1
+            continue
+        if personal_name(parts):
+            n["personal"] += 1
             continue
         if m.size > MAX_FILE:
             n["oversize"] += 1
@@ -197,14 +218,14 @@ def run():
         for d, dirs, files in os.walk(build, topdown=False):  # no empty folders left by drops
             if d != build and not os.listdir(d):
                 os.rmdir(d)
-        dropped = counts["machine"] + counts["hidden"] + counts["symlink"] + counts["oversize"] + counts["secrets"]
+        dropped = counts["machine"] + counts["hidden"] + counts["symlink"] + counts["oversize"] + counts["personal"] + counts["secrets"]
 
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         stamp = (
             "# vault snapshot (read-only, derived)\n\n"
             f"sha: {sha}\ngenerated: {now}\nfiles: {counts['files']}\ndropped: {dropped}\n"
             f"dropped_detail: machine-output {counts['machine']}, hidden {counts['hidden']}, symlinks {counts['symlink']}, "
-            f"oversize {counts['oversize']}, secrets {counts['secrets']}\n\n"
+            f"oversize {counts['oversize']}, personal-name {counts['personal']}, secrets {counts['secrets']}\n\n"
             "Pushed `origin/main` content only (never the live work tree), rebuilt hourly. Not a record: edits belong in the vault.\n"
         )
         with open(os.path.join(build, "SNAPSHOT.md"), "w") as f:
