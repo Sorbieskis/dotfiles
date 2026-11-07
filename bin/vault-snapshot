@@ -1,26 +1,40 @@
 #!/usr/bin/env python3
-"""vault-snapshot: the read-only vault snapshot claude.ai reads from (M9 P2).
+"""vault-snapshot: the read-only vault snapshot claude.ai reads from (M9 P2, widened by M11 P1).
 
 Publishes, hourly, a derived cache of what is already PUSHED to origin/main, outside the vault:
-  $SNAPSHOT_DIR/gen-<sha>/        the files; $SNAPSHOT_DIR/current -> gen-<sha> (relative symlink)
-The vault-door container mounts $SNAPSHOT_DIR read-only at /snapshot; its two read tools
-(search_notes, read_note) never see the live vault. Nothing here writes into the vault.
+  $SNAPSHOT_DIR/gen-<sha>-s<SCOPE>/   the files; $SNAPSHOT_DIR/current -> gen-<sha>-s<SCOPE> (relative symlink)
+The vault-door container mounts $SNAPSHOT_DIR read-only at /snapshot; its read tools (search_notes, read_file)
+never see the live vault. Nothing here writes into the vault.
 
-What is published (founder item 5): `*.md` files under 1_projects/, 2_areas/, 4_resources/ from
-`git archive refs/remotes/origin/main` (pushed content only: no work tree, no local commits), minus
-symlinks, hidden files/folders, machine output (1_projects/*/{pull-log,landings,engineering/jobs,
-engineering/seat}/**, 1_projects/*/agent-ledger*), every path `personal_name` excludes (any segment, any
-depth: starts with `belle`, contains `financ`, equals `journal`/`personal`/`3_personal`/`5_archive`;
-orch6 ruling 2026-11-07 on I10) and every file `gitleaks dir` flags. 0_inbox/, 3_personal/, belle/,
-journal/, 5_archive/ and everything else outside the three folders are never extracted.
+What is published (M11, founder 2026-11-07 "allow literally all"): every top-level folder and root file of
+`git archive refs/remotes/origin/main` (pushed content only: no work tree, no local commits), NO deny list, minus
+symlinks, hidden files/folders, machine output (1_projects/*/{pull-log,landings,engineering/jobs,engineering/seat}/**,
+1_projects/*/agent-ledger*), every other file type, files over the size caps (text 5 MB; images and PDFs 25 MB) and
+every file the credential scan flags. Types: text `md txt csv tsv json html tex typ puml yaml yml svg`, images
+`png jpg jpeg webp gif`, `pdf`. Anything else is `other-type`.
+
+PDF text (CONTRACT with the door): each PDF gets a sidecar `.text/<vault path>.txt` = the fixed first line
+`# pdf text of <vault path>` + "\n" + pdftotext's text verbatim (pages end with "\f"; page n is the n-th "\f"-separated
+chunk after the first line). pdftotext runs CONFINED (`systemd-run --user`: no network, read-only, no privilege gain,
+memory and time bounded; the PDF goes in on stdin, the text comes out on stdout). A failed extraction writes no
+sidecar and keeps the PDF (`pdf-notext`).
+
+Credential scan: gitleaks skips files by extension (`svg pdf png jpg`), by directory (`node_modules`) and by content
+sniff (`%PDF-`), so it never reads the published paths. It reads SCAN COPIES instead: every text-type file and every
+sidecar, copied as `<n>.txt` with the fixed first line `# scan copy` and no path (a map n -> path turns a hit back into
+a path). A hit drops that file; a hit on a sidecar drops the sidecar AND its PDF. A text-type file that is not UTF-8,
+holds a NUL or starts with a binary magic is dropped as `fake-binary` first. Images and PDF page pictures are not
+scannable (founder item 4).
 
 FAIL CLOSED: a gitleaks hit that cannot be dropped, a missing binary or config, any gitleaks error
 (exit 1 without a readable report is an error, not a hit) or a failed archive publishes nothing and
-keeps the old `current`. The swap is `ln -s gen-<sha> current.tmp && rename(current.tmp, current)`;
-the mounted parent directory is never renamed. Two generations are kept.
+keeps the old `current`. The swap is `ln -s gen-... current.tmp && rename(current.tmp, current)`;
+the mounted parent directory is never renamed. Two generations are kept. The generation key carries SCOPE, so a
+change of what is published rebuilds at an unchanged sha (bump SCOPE on any such change).
 
-Env (test hooks): VAULT_DIR, SNAPSHOT_DIR, GITLEAKS_BIN, GITLEAKS_CONFIG. Prints counts only, never
-file contents. Exit 0 = published or already current; 1 = nothing published.
+Env (test hooks): VAULT_DIR, SNAPSHOT_DIR, GITLEAKS_BIN, GITLEAKS_CONFIG, PDFTOTEXT_BIN, SNAPSHOT_SCOPE,
+EXTRACT_SECONDS, EXTRACT_MEMORY. Prints counts only, never file contents. Exit 0 = published or already current;
+1 = nothing published.
 """
 import fcntl
 import json
@@ -30,8 +44,8 @@ import stat
 import subprocess
 import sys
 import tarfile
+import threading
 import time
-import unicodedata
 
 HOME = os.path.expanduser("~")
 VAULT = os.environ.get("VAULT_DIR", os.path.join(HOME, "vault"))
@@ -39,9 +53,34 @@ OUT = os.environ.get("SNAPSHOT_DIR", os.path.join(HOME, ".cache", "vault-snapsho
 GITLEAKS = os.environ.get("GITLEAKS_BIN", os.path.join(HOME, ".local/share/mise/installs/aqua-gitleaks-gitleaks/8.30.1/gitleaks"))
 CONFIG = os.environ.get("GITLEAKS_CONFIG", os.path.join(HOME, ".dotfiles/vault/gitleaks.toml"))
 REF = "refs/remotes/origin/main"
-ALLOW = ("1_projects", "2_areas", "4_resources")
-MAX_FILE = 5_000_000
-PERSONAL = ("journal", "personal", "3_personal", "5_archive")
+SCOPE = 2  # M9's narrow scope was, in effect, 1; bump on ANY change of what is published (it is part of the generation key)
+TEXT_TYPES = ("md", "txt", "csv", "tsv", "json", "html", "tex", "typ", "puml", "yaml", "yml", "svg")
+IMAGE_TYPES = ("png", "jpg", "jpeg", "webp", "gif")
+MAX_TEXT = 5_000_000
+MAX_BINARY = 25_000_000
+SIDECAR_DIR = ".text"
+SCAN_LINE = b"# scan copy\n"
+PDFTOTEXT = os.environ.get("PDFTOTEXT_BIN", "/usr/bin/pdftotext")
+SYSTEMD_RUN = "/usr/bin/systemd-run"
+# The confined pdftotext (M11 P0b, measured): no network, read-only everywhere, no privilege gain, bounded memory,
+# tasks and time. No writable path at all: the PDF comes in on stdin and the text goes out on stdout (a pipe, never a file:
+# LimitFSIZE=0 kills a child that writes to one). MemoryMax and RuntimeMaxSec are added per call.
+SANDBOX = (
+    "PrivateNetwork=yes", "RestrictAddressFamilies=AF_UNIX", "ProtectSystem=strict", "ProtectHome=yes",
+    "InaccessiblePaths=/run", "PrivateTmp=no", "PrivateDevices=yes", "ReadOnlyPaths=/dev/shm", "NoNewPrivileges=yes",
+    "ProtectKernelTunables=yes", "ProtectControlGroups=yes", "SystemCallFilter=@system-service",
+    "SystemCallArchitectures=native", "MemorySwapMax=0", "TasksMax=16", "LimitFSIZE=0", "LimitCORE=0",
+)
+# Content magics that make `gitleaks dir` skip a text file (M11 P0b skip set; (offset, bytes)). With the fixed first line
+# of the scan copies this list is hygiene, not the filter.
+BINARY_MAGICS = (
+    (0, b"%PDF-"), (0, b"PK\x03\x04"), (0, b"\x1f\x8b"), (0, b"BZh"), (0, b"\xfd7zXZ\x00"), (0, b"7z\xbc\xaf\x27\x1c"),
+    (0, b"Rar!\x1a\x07"), (0, b"\x28\xb5\x2f\xfd"), (0, b"\x7fELF"), (0, b"MZ"), (0, b"\xfe\xed\xfa\xce"),
+    (0, b"\xfe\xed\xfa\xcf"), (0, b"\xce\xfa\xed\xfe"), (0, b"\xcf\xfa\xed\xfe"), (0, b"\xca\xfe\xba\xbe"),
+    (0, b"SQLite format 3\x00"), (0, b"%!PS"), (0, b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"), (0, b"\x00asm"),
+    (0, b"{\\rtf"), (0, b"Cr24"), (0, b"!<arch>\n"), (0, b"MSCF"), (0, b"FWS"), (0, b"CWS"), (0, b"ZWS"),
+    (257, b"ustar"),
+)
 
 
 class Fail(Exception):
@@ -63,33 +102,46 @@ def machine_output(parts):
     return parts[2] == "engineering" and len(parts) > 4 and parts[3] in ("jobs", "seat")
 
 
-def personal_name(parts):
-    """The ONE exclusion rule (founder item 5, orch6 ruling on I10): a path is out if ANY directory or
-    file-name segment, case-insensitive after Unicode NFKC, starts with `belle`, contains `financ`, or
-    equals `journal`, `personal`, `3_personal` or `5_archive` (a file name is also compared without
-    its `.md`, so `Journal.md` is out)."""
-    for p in parts:
-        s = unicodedata.normalize("NFKC", p).casefold()
-        if s.startswith("belle") or "financ" in s:
-            return True
-        if s in PERSONAL or s.removesuffix(".md") in PERSONAL:
-            return True
+def ext_of(name):
+    return os.path.splitext(name)[1][1:].lower()
+
+
+def fake_binary(data):
+    """A text-type file that is not UTF-8, holds a NUL or starts with a binary magic is not text."""
+    if b"\0" in data or any(data[o:o + len(m)] == m for o, m in BINARY_MAGICS):
+        return True
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        return True
     return False
 
 
+def write_new(target, data=None, src=None):
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, "wb") as f:
+        if src is not None:
+            shutil.copyfileobj(src, f)
+        else:
+            f.write(data)
+    os.chmod(target, 0o644)
+
+
 def extract(proc, dest):
-    """Stream the archive; write only wanted regular files. Returns counters."""
-    n = dict(files=0, machine=0, hidden=0, symlink=0, oversize=0, personal=0)
+    """Stream the archive; write only wanted regular files. Returns counters and the PDF paths."""
+    n = dict(files=0, machine=0, hidden=0, symlink=0, oversize=0, other=0, fake=0, notext=0)
+    pdfs = []
     tar = tarfile.open(fileobj=proc.stdout, mode="r|")
     for m in tar:
         name = m.name.lstrip("./") if m.name.startswith("./") else m.name
         parts = [p for p in name.split("/") if p]
-        if m.isdir() or not parts or parts[0] not in ALLOW or ".." in parts or name.startswith("/"):
+        if m.isdir() or not parts or ".." in parts or name.startswith("/"):
             continue
         if m.issym() or m.islnk():
             n["symlink"] += 1
             continue
-        if not m.isreg() or not name.endswith(".md"):
+        if not m.isreg():
             continue
         if any(p.startswith(".") for p in parts):
             n["hidden"] += 1
@@ -97,20 +149,113 @@ def extract(proc, dest):
         if machine_output(parts):
             n["machine"] += 1
             continue
-        if personal_name(parts):
-            n["personal"] += 1
+        ext = ext_of(parts[-1])
+        text = ext in TEXT_TYPES
+        if not (text or ext in IMAGE_TYPES or ext == "pdf") or any(ord(c) < 32 or c == "\x7f" for c in name):
+            n["other"] += 1  # a control character in a name would break the sidecar's fixed first line
             continue
-        if m.size > MAX_FILE:
+        if m.size > (MAX_TEXT if text else MAX_BINARY):
             n["oversize"] += 1
             continue
         target = os.path.join(dest, *parts)
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
-        with os.fdopen(fd, "wb") as f:
-            shutil.copyfileobj(tar.extractfile(m), f)
-        os.chmod(target, 0o644)
+        if text:
+            data = tar.extractfile(m).read()
+            if fake_binary(data):
+                n["fake"] += 1
+                continue
+            write_new(target, data=data)
+        else:
+            write_new(target, src=tar.extractfile(m))
+            if ext == "pdf":
+                pdfs.append("/".join(parts))
         n["files"] += 1
-    return n
+    return n, pdfs
+
+
+def pdf_text(pdf_path):
+    """The confined pdftotext: bytes of text, or None on any failure, limit hit or oversize output."""
+    seconds = os.environ.get("EXTRACT_SECONDS", "30")
+    memory = os.environ.get("EXTRACT_MEMORY", "512M")
+    props = [x for p in (*SANDBOX, f"RuntimeMaxSec={seconds}", f"MemoryMax={memory}") for x in ("-p", p)]
+    cmd = [SYSTEMD_RUN, "--user", "--pipe", "--wait", "--collect", *props, "--",
+           PDFTOTEXT, "-q", "-enc", "UTF-8", "-", "-"]
+    try:
+        with open(pdf_path, "rb") as pdf:
+            p = subprocess.Popen(cmd, stdin=pdf, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            guard = threading.Timer(int(seconds) + 15, p.kill)  # the unit's RuntimeMaxSec is the real bound
+            guard.start()
+            try:
+                out = p.stdout.read(MAX_TEXT + 1)  # read() returns early only at EOF
+                if len(out) > MAX_TEXT:
+                    p.kill()
+                    out = None
+                p.stdout.close()
+                rc = p.wait()
+            finally:
+                guard.cancel()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return out if out is not None and rc == 0 else None
+
+
+def write_sidecars(build, pdfs, counts):
+    for rel in pdfs:
+        text = pdf_text(os.path.join(build, *rel.split("/")))
+        if text is None:
+            counts["notext"] += 1
+            continue
+        body = text.decode("utf-8", "replace").replace("\0", "")
+        write_new(os.path.join(build, SIDECAR_DIR, *rel.split("/")) + ".txt", data=f"# pdf text of {rel}\n{body}".encode())
+
+
+def make_scan_copies(build, scan):
+    """Neutral-named copies (`<n>.txt`, fixed first line) of every text-type file and sidecar. Returns {n.txt: path}."""
+    os.mkdir(scan, 0o700)
+    mapping = {}
+    for d, dirs, files in os.walk(build):
+        dirs.sort()
+        for f in sorted(files):
+            if ext_of(f) in TEXT_TYPES:
+                path = os.path.join(d, f)
+                name = f"{len(mapping)}.txt"
+                with open(path, "rb") as src, open(os.path.join(scan, name), "wb") as dst:
+                    dst.write(SCAN_LINE)
+                    shutil.copyfileobj(src, dst)
+                mapping[name] = os.path.relpath(path, build)
+    return mapping
+
+
+def scan_and_drop(build, scan, report, counts):
+    """Scan the copies; drop what is flagged (a flagged sidecar drops its PDF too); rescan: the tree must be clean."""
+    mapping = make_scan_copies(build, scan)
+    try:
+        flagged = gitleaks_dir(scan, report)
+    finally:
+        shutil.rmtree(scan, ignore_errors=True)
+    if not flagged:
+        return
+    dropped = set()
+    for path in flagged:
+        rel = mapping.get(os.path.basename(path))
+        if rel is None:
+            raise Fail("gitleaks flagged a file that is not a scan copy")
+        if rel.startswith(SIDECAR_DIR + "/"):
+            pdf = rel[len(SIDECAR_DIR) + 1:-len(".txt")]
+            for victim in (rel, pdf):
+                if os.path.isfile(os.path.join(build, victim)):
+                    os.unlink(os.path.join(build, victim))
+            dropped.add(pdf)
+        else:
+            os.unlink(os.path.join(build, rel))
+            dropped.add(rel)
+    counts["files"] -= len(dropped)
+    counts["secrets"] = len(dropped)
+    make_scan_copies(build, scan)
+    try:
+        if gitleaks_dir(scan, report):  # dropping must leave a clean tree
+            raise Fail("gitleaks still reports a hit after dropping the flagged files")
+    finally:
+        shutil.rmtree(scan, ignore_errors=True)
 
 
 def normalise_modes(dest):
@@ -178,10 +323,11 @@ def run():
     sha = p.stdout.strip()
     if p.returncode != 0 or len(sha) < 40:
         raise Fail(f"{REF} not found in {VAULT}")
-    gen = f"gen-{sha}"
+    scope = int(os.environ.get("SNAPSHOT_SCOPE", SCOPE))
+    gen = f"gen-{sha}-s{scope}"
     cur = os.path.join(OUT, "current")
     if os.path.islink(cur) and os.readlink(cur) == gen and os.path.isfile(os.path.join(cur, "SNAPSHOT.md")):
-        print(f"vault-snapshot: {sha[:12]} already current")
+        print(f"vault-snapshot: {sha[:12]} scope {scope} already current")
         return
 
     for n in os.listdir(OUT):  # leftovers of a killed run
@@ -190,43 +336,41 @@ def run():
             shutil.rmtree(path, ignore_errors=True) if os.path.isdir(path) and not os.path.islink(path) else os.unlink(path)
 
     build = os.path.join(OUT, f".build-{os.getpid()}")
+    scan = os.path.join(OUT, f".build-{os.getpid()}.scan")
     report = os.path.join(OUT, f".build-{os.getpid()}.report.json")
     try:
-        top = git("ls-tree", "--name-only", REF, capture_output=True, text=True).stdout.split("\n")
-        present = [d for d in ALLOW if d in top]
-        if not present:
-            raise Fail("none of the allowlisted folders exists in the pushed tree")
+        if not git("ls-tree", "--name-only", REF, capture_output=True, text=True).stdout.strip():
+            raise Fail("the pushed tree is empty")
         os.mkdir(build, 0o755)
-        arch = subprocess.Popen(["git", "-C", VAULT, "archive", "--format=tar", REF, "--", *present],
+        arch = subprocess.Popen(["git", "-C", VAULT, "archive", "--format=tar", REF],
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         try:
-            counts = extract(arch, build)
+            counts, pdfs = extract(arch, build)
         finally:
             arch.stdout.close()
         if arch.wait() != 0:
             raise Fail("git archive failed")
 
-        flagged = gitleaks_dir(build, report)
-        for path in flagged:
-            if os.path.isfile(path) and not os.path.islink(path):
-                os.unlink(path)
-                counts["files"] -= 1
-        if flagged:
-            if gitleaks_dir(build, report):  # dropping must leave a clean tree
-                raise Fail("gitleaks still reports a hit after dropping the flagged files")
-        counts["secrets"] = len(flagged)
+        write_sidecars(build, pdfs, counts)
+        counts["secrets"] = 0
+        scan_and_drop(build, scan, report, counts)
         for d, dirs, files in os.walk(build, topdown=False):  # no empty folders left by drops
             if d != build and not os.listdir(d):
                 os.rmdir(d)
-        dropped = counts["machine"] + counts["hidden"] + counts["symlink"] + counts["oversize"] + counts["personal"] + counts["secrets"]
+        dropped = (counts["machine"] + counts["hidden"] + counts["symlink"] + counts["oversize"] + counts["other"]
+                   + counts["fake"] + counts["secrets"])  # pdf-notext is a kept PDF, not a drop
 
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        detail = (f"machine-output {counts['machine']}, hidden {counts['hidden']}, symlinks {counts['symlink']}, "
+                  f"oversize {counts['oversize']}, other-type {counts['other']}, fake-binary {counts['fake']}, "
+                  f"secrets {counts['secrets']}, pdf-notext {counts['notext']}")
         stamp = (
             "# vault snapshot (read-only, derived)\n\n"
-            f"sha: {sha}\ngenerated: {now}\nfiles: {counts['files']}\ndropped: {dropped}\n"
-            f"dropped_detail: machine-output {counts['machine']}, hidden {counts['hidden']}, symlinks {counts['symlink']}, "
-            f"oversize {counts['oversize']}, personal-name {counts['personal']}, secrets {counts['secrets']}\n\n"
-            "Pushed `origin/main` content only (never the live work tree), rebuilt hourly. Not a record: edits belong in the vault.\n"
+            f"sha: {sha}\nscope: {scope}\ngenerated: {now}\nfiles: {counts['files']}\ndropped: {dropped}\n"
+            f"dropped_detail: {detail}\n\n"
+            "Pushed `origin/main` content only (never the live work tree), rebuilt hourly. Not a record: edits belong in the vault. "
+            "`.text/<path>.txt` holds each PDF's extracted text (first line `# pdf text of <path>`, pages end with a form feed); "
+            "pdf-notext counts PDFs kept without one.\n"
         )
         with open(os.path.join(build, "SNAPSHOT.md"), "w") as f:
             f.write(stamp)
@@ -234,7 +378,7 @@ def run():
         normalise_modes(build)
 
         final = os.path.join(OUT, gen)
-        if os.path.lexists(final):  # an older generation of the same sha that is not current
+        if os.path.lexists(final):  # an older generation of the same key that is not current
             shutil.rmtree(final)
         os.rename(build, final)
         os.utime(final)
@@ -246,15 +390,16 @@ def run():
         prune(gen)
 
         per = {}
-        for d in ALLOW:
-            c = 0
-            for _, _, fs in os.walk(os.path.join(final, d)):
-                c += len(fs)
-            per[d] = c
-        print(f"vault-snapshot: {sha[:12]} {counts['files']} files "
-              + " ".join(f"{k}={v}" for k, v in per.items()) + f"; dropped {dropped} (" + stamp.split("dropped_detail: ")[1].split("\n")[0] + ")")
+        for top in sorted(os.listdir(final)):
+            if top in ("SNAPSHOT.md", SIDECAR_DIR):
+                continue
+            tp = os.path.join(final, top)
+            per[top] = sum(len(fs) for _, _, fs in os.walk(tp)) if os.path.isdir(tp) else 1
+        print(f"vault-snapshot: {sha[:12]} scope {scope} published {counts['files']} files "
+              + " ".join(f"{k}={v}" for k, v in per.items()) + f"; dropped {dropped} ({detail})")
     finally:
         shutil.rmtree(build, ignore_errors=True)
+        shutil.rmtree(scan, ignore_errors=True)
         if os.path.lexists(report):
             os.unlink(report)
 
