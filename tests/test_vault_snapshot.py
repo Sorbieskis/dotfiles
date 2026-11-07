@@ -21,6 +21,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import uuid
 
 sys.dont_write_bytecode = True
 
@@ -152,11 +153,11 @@ class Base(unittest.TestCase):
             git(self.vault, "update-ref", "refs/remotes/origin/main", "HEAD")
         return git(self.vault, "rev-parse", "HEAD")
 
-    def run_snapshot(self, gitleaks=None, config=True, **extra):
+    def run_snapshot(self, gitleaks=None, config=True, script=None, **extra):
         env = {**os.environ, **GIT_ENV, "VAULT_DIR": self.vault, "SNAPSHOT_DIR": self.out,
                "GITLEAKS_BIN": gitleaks or self.gl_ok, "GITLEAKS_CONFIG": CONFIG if config else "/nonexistent.toml"}
         env.update(extra)
-        return subprocess.run([SCRIPT], capture_output=True, text=True, env=env, timeout=120)
+        return subprocess.run([script or SCRIPT], capture_output=True, text=True, env=env, timeout=120)
 
     def current(self):
         return os.path.join(self.out, "current")
@@ -440,7 +441,12 @@ class PdfTextTests(Base):
         port = srv.getsockname()[1]
         self.addCleanup(srv.close)
         probe = os.path.join(self.root, "pt-probe")
-        victims = [os.path.join(self.root, "escaped.txt"), os.path.expanduser("~/.m11-snapshot-probe"), "/var/tmp/.m11-snapshot-probe"]
+        tag = uuid.uuid4().hex  # per-run names: a confinement failure leaves files, which are removed below
+        victims = [os.path.join(self.root, "escaped.txt"), os.path.expanduser(f"~/.m11-snapshot-probe-{tag}"),
+                   f"/var/tmp/.m11-snapshot-probe-{tag}"]
+        for v in victims:
+            self.assertFalse(os.path.exists(v), v)  # absent before the run
+            self.addCleanup(lambda v=v: os.path.exists(v) and os.unlink(v))
         with open(probe, "w") as f:
             f.write(f"""#!/usr/bin/python3
 import socket
@@ -544,6 +550,24 @@ class NoFileTypeIsPublishedUnscannedTests(Base):
         self.assertEqual(self.run_snapshot(gitleaks=GITLEAKS).returncode, 0)
         self.assertEqual(self.published(), {"1_projects/p/clean.md"})
         self.assertIn("fake-binary 3,", self.stamp())
+
+    def test_the_scan_copy_first_line_alone_keeps_gitleaks_from_skipping_a_binary_looking_file(self):
+        # I7: with the magic list emptied (the head check is hygiene), a `%PDF-`-headed .txt holding a token is still
+        # dropped, because every scan copy starts with the fixed `# scan copy` line and gitleaks sniffs that, not the file
+        src = open(SCRIPT).read()
+        patched = re.sub(r"(?s)\nBINARY_MAGICS = \(.*?\n\)\n", "\nBINARY_MAGICS = ()\n", src, count=1)
+        self.assertNotEqual(patched, src)
+        script = os.path.join(self.root, "vault-snapshot-no-magics")
+        with open(script, "w") as f:
+            f.write(patched)
+        os.chmod(script, 0o755)
+        self.putb("1_projects/p/fake.txt", b"%PDF-1.4 token = " + secret().encode() + b"\n")
+        self.put("1_projects/p/clean.md")
+        self.commit()
+        r = self.run_snapshot(gitleaks=GITLEAKS, script=script)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.published(), {"1_projects/p/clean.md"})
+        self.assertIn("secrets 1,", self.stamp())
 
 
 class FailClosedTests(Base):
