@@ -65,11 +65,11 @@ def machine_output(parts):
 
 def personal_name(parts):
     """The ONE exclusion rule (founder item 5, orch6 ruling on I10): a path is out if ANY directory or
-    file-name segment, case-insensitive after Unicode NFC, starts with `belle`, contains `financ`, or
+    file-name segment, case-insensitive after Unicode NFKC, starts with `belle`, contains `financ`, or
     equals `journal`, `personal`, `3_personal` or `5_archive` (a file name is also compared without
     its `.md`, so `Journal.md` is out)."""
     for p in parts:
-        s = unicodedata.normalize("NFC", p).casefold()
+        s = unicodedata.normalize("NFKC", p).casefold()
         if s.startswith("belle") or "financ" in s:
             return True
         if s in PERSONAL or s.removesuffix(".md") in PERSONAL:

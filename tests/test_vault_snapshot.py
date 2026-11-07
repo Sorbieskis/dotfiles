@@ -151,7 +151,7 @@ class MachineOutputTests(Base):
 
 
 class PersonalNameTests(Base):
-    """Founder item 5, orch6 ruling on I10: exclusion by path SEGMENT at any depth, case-insensitive, NFC."""
+    """Founder item 5, orch6 ruling on I10: exclusion by path SEGMENT at any depth, case-insensitive, NFKC."""
 
     def test_a_segment_that_starts_with_belle_contains_financ_or_equals_a_personal_name_is_out_at_any_depth(self):
         drop = [
@@ -194,6 +194,14 @@ class PersonalNameTests(Base):
         self.commit()
         self.assertEqual(self.run_snapshot().returncode, 0)
         self.assertEqual(self.published(), {"1_projects/p/Bell\u00e9/a.md", "1_projects/p/Bell\u0065\u0301/b.md"})
+
+    def test_fullwidth_compatibility_spellings_are_dropped_too(self):  # I16: NFKC, not NFC
+        self.put("1_projects/p/\uff46\uff49\uff4e\uff41\uff4e\uff43\uff45.md")      # fullwidth "finance.md"
+        self.put("1_projects/p/\uff22\uff25\uff2c\uff2c\uff25-notes/a.md")           # fullwidth "BELLE-notes"
+        self.put("1_projects/p/ok.md")
+        self.commit()
+        self.assertEqual(self.run_snapshot().returncode, 0)
+        self.assertEqual(self.published(), {"1_projects/p/ok.md"})
 
     def test_a_file_over_5_mb_is_not_published_and_is_counted_oversize(self):  # I11
         self.put("1_projects/p/ok.md")
