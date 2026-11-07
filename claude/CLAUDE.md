@@ -87,6 +87,8 @@ Public 22 is closed (UFW) and filtered (netcup SCP policy `osnova-vps`, 2026-09-
   `http://100.93.13.127:8123/p/lab/YYYY-MM-slug/<file>.png` (one picture, swipe for the rest of the
   folder) or `http://100.93.13.127:8123/#pictures/<repo>/lab/YYYY-MM-slug` (the folder's gallery). Names:
   letters, digits, `._-` only (a name with a space or other character is not listed), at most 5 folders deep.
+- Showing dima a map (a picture with markers, legend and layers, any project, 2026-11-07): a box-hub Maps link
+  (`http://100.93.13.127:8123/m/lab/YYYY-MM-slug/<dir>/`), made with `box-hub-map` (`box-hub-map --help`); he opens it on the phone.
 - Two GitHub accounts (unchanged): `Sorbieskis` (personal) and `dsuchank`
   (`~/dev/asml`, own key + noreply email via an `includeIf`). Keep `Sorbieskis`
   the ACTIVE gh account and use `ghw <cmd>` for work: `gh auth switch` is
