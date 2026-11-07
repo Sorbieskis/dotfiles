@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# box-hub-map: make a box-hub map folder (map.json + tiles). Source: ~/dev/box-hub/box_hub_map.py (SPEC.md, ## Maps).
+exec /usr/bin/python3 ~/dev/box-hub/box_hub_map.py "$@"
