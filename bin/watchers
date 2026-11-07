@@ -1,0 +1,5 @@
+#!/bin/sh
+# watchers: dima's ntfy watchers (~/dev/watchers). list | run NAME [--dry-run] | test NAME |
+# stop NAME | start NAME | install. The code, watchers.toml and README live in the repo.
+R="$HOME/dev/watchers"
+PYTHONPATH="$R${PYTHONPATH:+:$PYTHONPATH}" exec "$R/.venv/bin/python" -m watch "$@"
