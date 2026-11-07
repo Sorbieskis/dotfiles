@@ -1,0 +1,249 @@
+#!/usr/bin/env python3
+"""vault-snapshot: the read-only vault snapshot claude.ai reads from (M9 P2).
+
+Publishes, hourly, a derived cache of what is already PUSHED to origin/main, outside the vault:
+  $SNAPSHOT_DIR/gen-<sha>/        the files; $SNAPSHOT_DIR/current -> gen-<sha> (relative symlink)
+The vault-door container mounts $SNAPSHOT_DIR read-only at /snapshot; its two read tools
+(search_notes, read_note) never see the live vault. Nothing here writes into the vault.
+
+What is published (founder item 5): `*.md` files under 1_projects/, 2_areas/, 4_resources/ from
+`git archive refs/remotes/origin/main` (pushed content only: no work tree, no local commits), minus
+symlinks, hidden files/folders, machine output (1_projects/*/{pull-log,landings,engineering/jobs,
+engineering/seat}/**, 1_projects/*/agent-ledger*) and every file `gitleaks dir` flags. 0_inbox/,
+3_personal/, belle/, journal/, 5_archive/ and everything else are never extracted.
+
+FAIL CLOSED: a gitleaks hit that cannot be dropped, a missing binary or config, any gitleaks error
+(exit 1 without a readable report is an error, not a hit) or a failed archive publishes nothing and
+keeps the old `current`. The swap is `ln -s gen-<sha> current.tmp && rename(current.tmp, current)`;
+the mounted parent directory is never renamed. Two generations are kept.
+
+Env (test hooks): VAULT_DIR, SNAPSHOT_DIR, GITLEAKS_BIN, GITLEAKS_CONFIG. Prints counts only, never
+file contents. Exit 0 = published or already current; 1 = nothing published.
+"""
+import fcntl
+import json
+import os
+import shutil
+import stat
+import subprocess
+import sys
+import tarfile
+import time
+
+HOME = os.path.expanduser("~")
+VAULT = os.environ.get("VAULT_DIR", os.path.join(HOME, "vault"))
+OUT = os.environ.get("SNAPSHOT_DIR", os.path.join(HOME, ".cache", "vault-snapshot"))
+GITLEAKS = os.environ.get("GITLEAKS_BIN", os.path.join(HOME, ".local/share/mise/installs/aqua-gitleaks-gitleaks/8.30.1/gitleaks"))
+CONFIG = os.environ.get("GITLEAKS_CONFIG", os.path.join(HOME, ".dotfiles/vault/gitleaks.toml"))
+REF = "refs/remotes/origin/main"
+ALLOW = ("1_projects", "2_areas", "4_resources")
+MAX_FILE = 5_000_000
+
+
+class Fail(Exception):
+    pass
+
+
+def git(*args, **kw):
+    return subprocess.run(["git", "-C", VAULT, *args], **kw)
+
+
+def machine_output(parts):
+    """1_projects/<p>/{pull-log,landings}/**, <p>/engineering/{jobs,seat}/**, <p>/agent-ledger* (P3's list)."""
+    if parts[0] != "1_projects" or len(parts) < 3:
+        return False
+    if parts[2].startswith("agent-ledger"):
+        return True
+    if parts[2] in ("pull-log", "landings"):
+        return len(parts) > 3
+    return parts[2] == "engineering" and len(parts) > 4 and parts[3] in ("jobs", "seat")
+
+
+def extract(proc, dest):
+    """Stream the archive; write only wanted regular files. Returns counters."""
+    n = dict(files=0, machine=0, hidden=0, symlink=0, oversize=0)
+    tar = tarfile.open(fileobj=proc.stdout, mode="r|")
+    for m in tar:
+        name = m.name.lstrip("./") if m.name.startswith("./") else m.name
+        parts = [p for p in name.split("/") if p]
+        if m.isdir() or not parts or parts[0] not in ALLOW or ".." in parts or name.startswith("/"):
+            continue
+        if m.issym() or m.islnk():
+            n["symlink"] += 1
+            continue
+        if not m.isreg() or not name.endswith(".md"):
+            continue
+        if any(p.startswith(".") for p in parts):
+            n["hidden"] += 1
+            continue
+        if machine_output(parts):
+            n["machine"] += 1
+            continue
+        if m.size > MAX_FILE:
+            n["oversize"] += 1
+            continue
+        target = os.path.join(dest, *parts)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+        with os.fdopen(fd, "wb") as f:
+            shutil.copyfileobj(tar.extractfile(m), f)
+        os.chmod(target, 0o644)
+        n["files"] += 1
+    return n
+
+
+def normalise_modes(dest):
+    os.chmod(dest, 0o755)
+    for d, dirs, _ in os.walk(dest):
+        for x in dirs:
+            os.chmod(os.path.join(d, x), 0o755)
+
+
+def gitleaks_dir(dest, report):
+    """Run `gitleaks dir`; returns the list of flagged files (absolute, verified inside dest)."""
+    if not (os.path.isfile(GITLEAKS) and os.access(GITLEAKS, os.X_OK)):
+        raise Fail("gitleaks binary missing")
+    if not os.access(CONFIG, os.R_OK):
+        raise Fail("gitleaks config unreadable")
+    if os.path.lexists(report):
+        os.unlink(report)
+    cmd = [GITLEAKS, "dir", "--no-banner", "--redact", "--exit-code", "1", "--ignore-gitleaks-allow",
+           "--log-level", "error", "--config", CONFIG, "--report-format", "json", "--report-path", report, dest]
+    try:
+        p = subprocess.run(cmd, capture_output=True, timeout=600, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise Fail(f"gitleaks could not run ({type(e).__name__})") from None
+    if p.returncode == 0:
+        return []
+    if p.returncode != 1:
+        raise Fail(f"gitleaks exited {p.returncode}")
+    # exit 1 means "hit" OR "bad config": only a readable, non-empty report counts as a hit.
+    try:
+        with open(report) as f:
+            findings = json.load(f)
+        assert isinstance(findings, list) and findings
+        files = set()
+        base = os.path.realpath(dest)
+        for x in findings:
+            path = x["File"]
+            path = path if os.path.isabs(path) else os.path.join(dest, path)
+            real = os.path.realpath(os.path.dirname(path))
+            if real != base and not real.startswith(base + os.sep):
+                raise Fail("gitleaks report names a path outside the snapshot")
+            files.add(os.path.join(real, os.path.basename(path)))
+    except Fail:
+        raise
+    except Exception:
+        raise Fail("gitleaks exited 1 without a readable report") from None
+    return sorted(files)
+
+
+def prune(keep_current):
+    gens = [g for g in os.listdir(OUT) if g.startswith("gen-") and g != keep_current]
+    gens.sort(key=lambda g: os.stat(os.path.join(OUT, g)).st_mtime, reverse=True)
+    for g in gens[1:]:  # current + the newest other = two generations
+        shutil.rmtree(os.path.join(OUT, g), ignore_errors=True)
+
+
+def run():
+    os.makedirs(OUT, mode=0o755, exist_ok=True)
+    lock = open(os.path.join(OUT, ".lock"), "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        raise Fail("another run holds the lock") from None
+
+    p = git("rev-parse", "-q", "--verify", REF, capture_output=True, text=True)
+    sha = p.stdout.strip()
+    if p.returncode != 0 or len(sha) < 40:
+        raise Fail(f"{REF} not found in {VAULT}")
+    gen = f"gen-{sha}"
+    cur = os.path.join(OUT, "current")
+    if os.path.islink(cur) and os.readlink(cur) == gen and os.path.isfile(os.path.join(cur, "SNAPSHOT.md")):
+        print(f"vault-snapshot: {sha[:12]} already current")
+        return
+
+    for n in os.listdir(OUT):  # leftovers of a killed run
+        if n.startswith(".build"):
+            path = os.path.join(OUT, n)
+            shutil.rmtree(path, ignore_errors=True) if os.path.isdir(path) and not os.path.islink(path) else os.unlink(path)
+
+    build = os.path.join(OUT, f".build-{os.getpid()}")
+    report = os.path.join(OUT, f".build-{os.getpid()}.report.json")
+    try:
+        top = git("ls-tree", "--name-only", REF, capture_output=True, text=True).stdout.split("\n")
+        present = [d for d in ALLOW if d in top]
+        if not present:
+            raise Fail("none of the allowlisted folders exists in the pushed tree")
+        os.mkdir(build, 0o755)
+        arch = subprocess.Popen(["git", "-C", VAULT, "archive", "--format=tar", REF, "--", *present],
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        try:
+            counts = extract(arch, build)
+        finally:
+            arch.stdout.close()
+        if arch.wait() != 0:
+            raise Fail("git archive failed")
+
+        flagged = gitleaks_dir(build, report)
+        for path in flagged:
+            if os.path.isfile(path) and not os.path.islink(path):
+                os.unlink(path)
+                counts["files"] -= 1
+        if flagged:
+            if gitleaks_dir(build, report):  # dropping must leave a clean tree
+                raise Fail("gitleaks still reports a hit after dropping the flagged files")
+        counts["secrets"] = len(flagged)
+        for d, dirs, files in os.walk(build, topdown=False):  # no empty folders left by drops
+            if d != build and not os.listdir(d):
+                os.rmdir(d)
+        dropped = counts["machine"] + counts["hidden"] + counts["symlink"] + counts["oversize"] + counts["secrets"]
+
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        stamp = (
+            "# vault snapshot (read-only, derived)\n\n"
+            f"sha: {sha}\ngenerated: {now}\nfiles: {counts['files']}\ndropped: {dropped}\n"
+            f"dropped_detail: machine-output {counts['machine']}, hidden {counts['hidden']}, symlinks {counts['symlink']}, "
+            f"oversize {counts['oversize']}, secrets {counts['secrets']}\n\n"
+            "Pushed `origin/main` content only (never the live work tree), rebuilt hourly. Not a record: edits belong in the vault.\n"
+        )
+        with open(os.path.join(build, "SNAPSHOT.md"), "w") as f:
+            f.write(stamp)
+        os.chmod(os.path.join(build, "SNAPSHOT.md"), 0o644)
+        normalise_modes(build)
+
+        final = os.path.join(OUT, gen)
+        if os.path.lexists(final):  # an older generation of the same sha that is not current
+            shutil.rmtree(final)
+        os.rename(build, final)
+        os.utime(final)
+        tmp = os.path.join(OUT, "current.tmp")
+        if os.path.lexists(tmp):
+            os.unlink(tmp)
+        os.symlink(gen, tmp)
+        os.replace(tmp, cur)  # atomic: a reader sees the old or the new generation, never neither
+        prune(gen)
+
+        per = {}
+        for d in ALLOW:
+            c = 0
+            for _, _, fs in os.walk(os.path.join(final, d)):
+                c += len(fs)
+            per[d] = c
+        print(f"vault-snapshot: {sha[:12]} {counts['files']} files "
+              + " ".join(f"{k}={v}" for k, v in per.items()) + f"; dropped {dropped} (" + stamp.split("dropped_detail: ")[1].split("\n")[0] + ")")
+    finally:
+        shutil.rmtree(build, ignore_errors=True)
+        if os.path.lexists(report):
+            os.unlink(report)
+
+
+if __name__ == "__main__":
+    try:
+        run()
+    except Fail as e:
+        print(f"vault-snapshot: nothing published: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"vault-snapshot: nothing published: {type(e).__name__}: {e}", file=sys.stderr)
+        sys.exit(1)

@@ -255,7 +255,7 @@ class FailClosedTests(Base):
         self.assertEqual(os.readlink(self.current()), f"gen-{old}")
         self.assertEqual(self.gens(), [f"gen-{old}"])
         self.assertEqual(self.published(), {"1_projects/p/old.md"})
-        self.assertEqual([n for n in os.listdir(self.out) if n not in (f"gen-{old}", "current")], [])  # no build leftovers
+        self.assertEqual([n for n in os.listdir(self.out) if n not in (f"gen-{old}", "current", ".lock")], [])  # no build leftovers
 
     def test_gitleaks_error_publishes_nothing_and_keeps_the_old_current(self):
         old = self.first_generation()
@@ -299,6 +299,33 @@ class FailClosedTests(Base):
                 'echo \'[{"File":"1_projects/p/new.md","RuleID":"x"}]\' > "$rp"; exit 1')
         r = self.run_snapshot(gitleaks=stub(os.path.join(self.root, "gl-stuck"), body))
         self.assertNotEqual(r.returncode, 0)
+        self.assert_old_kept(old)
+
+    def test_exit_1_with_an_empty_report_is_an_error_not_a_hit(self):
+        old = self.first_generation()
+        self.put("1_projects/p/new.md")
+        self.commit()
+        body = ('rp=""; while [ $# -gt 0 ]; do [ "$1" = "--report-path" ] && rp="$2"; shift; done\n'
+                'echo "[]" > "$rp"; exit 1')
+        r = self.run_snapshot(gitleaks=stub(os.path.join(self.root, "gl-empty"), body))
+        self.assertNotEqual(r.returncode, 0)
+        self.assert_old_kept(old)
+
+    def test_a_report_naming_a_file_outside_the_generation_deletes_nothing_there(self):
+        # first call: report a file outside (exit 1); second call: exit 0, so only the path check can stop the delete
+        old = self.first_generation()
+        self.put("1_projects/p/new.md")
+        self.commit()
+        victim = os.path.join(self.root, "victim.md")
+        with open(victim, "w") as f:
+            f.write("must survive\n")
+        flag = os.path.join(self.root, "called-once")
+        body = ('rp=""; while [ $# -gt 0 ]; do [ "$1" = "--report-path" ] && rp="$2"; shift; done\n'
+                f'if [ -e {flag} ]; then exit 0; fi; touch {flag}\n'
+                f'echo \'[{{"File":"{victim}","RuleID":"x"}}]\' > "$rp"; exit 1')
+        r = self.run_snapshot(gitleaks=stub(os.path.join(self.root, "gl-victim"), body))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertTrue(os.path.exists(victim))
         self.assert_old_kept(old)
 
     def test_a_report_naming_a_path_outside_the_generation_is_an_error(self):

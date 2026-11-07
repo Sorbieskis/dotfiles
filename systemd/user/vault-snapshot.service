@@ -1,0 +1,10 @@
+[Unit]
+Description=vault-snapshot — read-only snapshot of the pushed vault for the claude.ai door (M9 P2)
+# Writes ONLY ~/.cache/vault-snapshot (a derived cache the vault-door container mounts read-only);
+# reads the vault's origin/main with git archive, never the work tree. Fails closed on any gitleaks problem.
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/vault-snapshot
+Nice=10
+MemoryMax=1G
