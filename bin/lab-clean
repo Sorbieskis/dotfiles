@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+"""lab-clean <slug> [--dry-run | --yes]
+
+Remove ONE lab slug's own docker leftovers. Seats are denied `docker rm`/`rmi`; this script is
+their single allowed way to clean up, so it is deliberately narrow and fails closed.
+
+  containers: label tier=lab AND name starts `lab-<slug>-` (both, re-checked per container).
+  images:     tag is `<slug>`, `<slug>-*`, `lab-<slug>` or `lab-<slug>-*` (never `latest`, never untagged),
+              AND no container (any tier) uses the image, AND no compose file under /opt/stacks
+              references the image's repo, id or digest.
+
+Default is a dry run. `--yes` removes. Nothing is ever forced (`rmi` without -f); containers go by id.
+"""
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+STACKS = Path("/opt/stacks")
+SLUG_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+USAGE = "usage: lab-clean <slug> [--dry-run | --yes]"
+
+
+class Refuse(Exception):
+    pass
+
+
+def check_slug(s):
+    # lowercase alnum words joined by single dashes: no space, ';', '/', '*', leading '-'.
+    # A digit is required (milestone m11, lab dir 2026-11-x): bare words like `lab` or `caddy` are too broad.
+    if not (2 <= len(s) <= 60) or not SLUG_RE.fullmatch(s) or not re.search(r"[0-9]", s):
+        raise Refuse(f"refused: {s!r} is not a milestone or lab slug (a-z, 0-9, single dashes, one digit at least)")
+    return s
+
+
+def parse_args(argv):
+    slug, yes, dry = None, False, False
+    for a in argv:
+        if a == "--yes":
+            yes = True
+        elif a == "--dry-run":
+            dry = True
+        elif a.startswith("-"):
+            raise Refuse(f"refused: unknown option {a!r}\n{USAGE}")
+        elif slug is None:
+            slug = a
+        else:
+            raise Refuse(f"refused: one slug only, got a second argument {a!r}\n{USAGE}")
+    if slug is None:
+        raise Refuse(USAGE)
+    if yes and dry:
+        raise Refuse("refused: --yes and --dry-run together")
+    return check_slug(slug), yes
+
+
+def docker(*args):
+    r = subprocess.run(["docker", *args], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise Refuse(f"docker {' '.join(args[:2])} failed: {r.stderr.strip()[:200]}")
+    return r.stdout
+
+
+def containers():
+    """Every container, any tier: (full id, name, tier label, image id)."""
+    ids = docker("container", "ls", "-a", "-q", "--no-trunc").split()
+    if not ids:
+        return []
+    fmt = '{{.Id}}\t{{.Name}}\t{{index .Config.Labels "tier"}}\t{{.Image}}'
+    rows = []
+    for line in docker("container", "inspect", "--format", fmt, *ids).splitlines():
+        cid, name, tier, image = line.split("\t")
+        rows.append((cid, name.lstrip("/"), tier, image))
+    return rows
+
+
+def pick_containers(rows, slug):
+    return [r for r in rows if r[2] == "lab" and r[1].startswith(f"lab-{slug}-")]
+
+
+def tag_matches(tag, slug):
+    if tag in ("", "<none>", "latest"):
+        return False
+    for base in (slug, f"lab-{slug}"):
+        if tag == base or tag.startswith(base + "-"):
+            return True
+    return False
+
+
+def repo_of(ref):
+    """`docker.io/library/postgres:16@sha256:..` -> `postgres`; a registry host stays."""
+    ref = ref.split("@")[0]
+    if ":" in ref.rsplit("/", 1)[-1]:
+        ref = ref.rsplit(":", 1)[0]
+    for pre in ("docker.io/", "library/"):
+        if ref.startswith(pre):
+            ref = ref[len(pre):]
+    return ref
+
+
+def prod_refs(stacks):
+    """(repos, text) the compose files under `stacks` mention. Fails closed on anything unreadable
+    or interpolated; an absent /opt/stacks (not a prod host) means no references."""
+    if not stacks.exists():
+        return set(), ""
+    repos, text = set(), []
+    for p in sorted(stacks.rglob("*")):
+        if p.name.startswith(".env") or p.suffix not in (".yml", ".yaml"):
+            continue
+        try:
+            body = p.read_text()
+        except OSError as e:
+            raise Refuse(f"refused: cannot read {p} ({e.strerror}); image removal needs every compose file")
+        text.append(body)
+        for m in re.finditer(r"^\s*image:\s*[\"']?([^\s\"'#]+)", body, re.M):
+            ref = m.group(1)
+            if "$" in ref:
+                raise Refuse(f"refused: {p} has an interpolated image {ref!r}; cannot tell which repos are prod")
+            repos.add(repo_of(ref))
+    return repos, "\n".join(text)
+
+
+def images(slug, stacks):
+    """Candidate (ref, id) pairs by tag rule, before the in-use / prod filters."""
+    fmt = "{{.ID}}\t{{.Repository}}\t{{.Tag}}"
+    out = []
+    for line in docker("image", "ls", "--no-trunc", "--format", fmt).splitlines():
+        iid, repo, tag = line.split("\t")
+        repo = repo_of(repo)
+        if repo != "<none>" and tag_matches(tag, slug):
+            out.append((f"{repo}:{tag}", iid, repo))
+    return out
+
+
+def image_digests(iid):
+    out = docker("image", "inspect", "--format", '{{range .RepoDigests}}{{.}} {{end}}', iid).split()
+    return [d.split("@", 1)[1] for d in out if "@" in d]
+
+
+def plan(slug, stacks=STACKS):
+    rows = containers()
+    doomed = pick_containers(rows, slug)
+    keep_ids = {r[0] for r in doomed}
+    in_use = {r[3] for r in rows if r[0] not in keep_ids}
+    cand = images(slug, stacks)
+    imgs, skipped = [], []
+    if cand:
+        repos, text = prod_refs(stacks)
+        for ref, iid, repo in cand:
+            why = None
+            if iid in in_use:
+                why = "in use by a container"
+            elif repo in repos:
+                why = "repo is in a prod compose"
+            elif iid in text or ref in text or any(d in text for d in image_digests(iid)):
+                why = "a prod compose references it"
+            (skipped if why else imgs).append((ref, iid) if not why else (ref, why))
+    return doomed, imgs, skipped
+
+
+def main(argv, stacks=STACKS):
+    try:
+        slug, yes = parse_args(argv)
+        doomed, imgs, skipped = plan(slug, stacks)
+    except Refuse as e:
+        print(f"lab-clean: {e}", file=sys.stderr)
+        return 2
+    for c in doomed:
+        print(f"container {c[1]}")
+    for ref, _ in imgs:
+        print(f"image {ref}")
+    for ref, why in skipped:
+        print(f"kept image {ref} ({why})")
+    n, m = len(doomed), len(imgs)
+    if not yes:
+        print(f"lab-clean {slug}: would remove {n} container(s), {m} image(s) (dry run; --yes removes)")
+        return 0
+    try:
+        for c in doomed:
+            docker("rm", "-f", c[0])
+        for ref, _ in imgs:
+            # re-check right before removal: removing the containers may free it, nothing else may have taken it
+            docker("rmi", ref)
+    except Refuse as e:
+        print(f"lab-clean: {e}", file=sys.stderr)
+        return 1
+    print(f"lab-clean {slug}: removed {n} container(s), {m} image(s)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
