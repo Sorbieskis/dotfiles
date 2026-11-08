@@ -108,8 +108,10 @@ def prod_refs(stacks):
     """(repos, text) of every .yml/.yaml under `stacks` (symlinks followed). Fails closed on anything
     unreadable, any interpolated `image:` and any line that mentions `image` but is not a plain
     `image: ref` scalar (alias, folded, flow or quoted-key forms); an absent /opt/stacks has none."""
-    if not stacks.exists():
+    if not os.path.lexists(stacks):
         return set(), ""
+    if not stacks.is_dir():
+        raise Refuse(f"refused: {stacks} exists but is not a readable directory (broken link?)")
 
     def unreadable(e):
         raise Refuse(f"refused: cannot read {e.filename} ({e.strerror}); image removal needs every compose file")
@@ -122,8 +124,8 @@ def prod_refs(stacks):
                 continue
             try:
                 body = p.read_text()
-            except OSError as e:
-                unreadable(e)
+            except (OSError, UnicodeDecodeError) as e:
+                raise Refuse(f"refused: cannot read {p} ({e}); image removal needs every compose file")
             text.append(body)
             for line in body.splitlines():
                 if line.lstrip().startswith("#") or not re.search(r"\bimage\b", line):

@@ -231,6 +231,21 @@ class Fail_closed(Base):
         self.assertIn("cannot read", err)
         self.assertEqual(self.removals(), [])
 
+    def test_broken_stacks_symlink_and_non_utf8_compose_refuse(self):
+        self.compose("bad.yml", "", sub="x")
+        with open(os.path.join(self.stacks, "x", "bad.yml"), "wb") as f:
+            f.write(b"image: \xff\xfe\n")
+        rc, _, err = self.run_main("m11", "--yes")
+        self.assertEqual((rc, self.removals()), (2, []))
+        self.assertIn("cannot read", err)
+        link = os.path.join(self.tmp.name, "dangling")
+        os.symlink(os.path.join(self.tmp.name, "nowhere"), link)
+        import pathlib
+        mod = load()
+        os.environ.update(self.env)
+        with self.assertRaises(mod.Refuse):
+            mod.prod_refs(pathlib.Path(link))
+
     def test_image_forms_that_are_not_a_plain_scalar_refuse(self):
         for line in ("image: *base", "image: >-", '"image": thing:1', "{image: thing:1}", "image:", "image: ${R}:1", "image: reg.io/${R}:1"):
             with self.subTest(line=line):
