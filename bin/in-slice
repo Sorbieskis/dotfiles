@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# in-slice <cmd…>: run <cmd> inside the capped zellij.slice (systemd/user/zellij.slice). The one launch path for
+# claude and zellij (~/dev/build-loop/seats.md). Execs in place when already in the slice or when the user
+# manager is down. zj-spawn does NOT use it: its new zellij server must get its own scope, not the caller's.
+[ $# -gt 0 ] || { echo "usage: in-slice <cmd…>" >&2; exit 2; }
+if grep -q zellij.slice /proc/self/cgroup || ! systemctl --user -q is-active default.target 2>/dev/null; then
+  exec "$@"
+fi
+exec systemd-run --user --scope --slice=zellij.slice --quiet --collect -- "$@"

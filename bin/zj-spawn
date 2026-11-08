@@ -45,7 +45,7 @@ layout {
 }
 EOF
 
-# inside zellij.slice, so the session shares the 20 GB cap (systemd/user/zellij.slice)
+# inside zellij.slice (systemd/user/zellij.slice), in its OWN scope on purpose: not `in-slice`, whose exec-in-place would put the new server in the caller's cgroup (restarting zellij-main.service would kill it)
 setsid systemd-run --user --scope --slice=zellij.slice --quiet --collect -- env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" SHELL=/usr/bin/fish TERM=xterm-256color LANG=en_US.UTF-8 \
   XDG_RUNTIME_DIR="$rt" DBUS_SESSION_BUS_ADDRESS="unix:path=$rt/bus" \
   PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" \

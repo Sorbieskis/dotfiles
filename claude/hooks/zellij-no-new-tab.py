@@ -66,13 +66,6 @@ except Exception:
 p = offending(cmd or "")
 if p:
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-        "permissionDecisionReason": f"{p} is blocked. Adding a tab to a running zellij session while no client is "
-        "attached makes the next attach panic the whole server, killing every Claude in it (osnova crashed this way "
-        "2026-10-14 and 2026-10-15); new-tab IS allowed while a client is attached to that session. With no client, "
-        "go-to-tab-name and a plain write-chars do nothing. Unattended: reuse an EXISTING idle tab by pane id: "
-        "`zellij -s <s> action list-panes -t -c` to find its terminal_N, then `zellij -s <s> action write-chars "
-        "-p terminal_N '<command>'` (then a newline the same way). Or, as a last resort, "
-        "open it in its own detached session: "
-        "`zj-spawn <new-session-name> <cwd> <command...>` (e.g. zj-spawn orch-23 ~/dev/osnova-product fish "
-        "~/lab/2026-10-m128-run/launch23.fish). `zellij run`, `close-tab-by-id` and `write-chars` to an existing pane are fine."}}))
+        "permissionDecisionReason": f"{p} is blocked: with no client attached it panics the next zellij attach "
+        "or silently goes nowhere. Launch seats as ~/dev/build-loop/seats.md says."}}))
 sys.exit(0)

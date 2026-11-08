@@ -32,25 +32,14 @@ Public 22 is closed (UFW) and filtered (netcup SCP policy `osnova-vps`, 2026-09-
 ## Dev workflow
 
 - Projects live in `~/dev/<project>`: flat, one dir per repo, NEVER moved
-  (Claude Code history and memory are keyed by path). One Claude conversation
-  per project (new tab, by hand from an attached terminal: `zellij action new-tab --name <p> --cwd ~/dev/<p>`).
-  Agents never add a tab while no client is attached: on zellij 0.45.1 that makes the next attach
-  panic the whole session (osnova died this way 2026-10-14 and -15); the hook
-  (`claude/hooks/zellij-no-new-tab.py`) allows new-tab only while `list-clients` shows a client.
-  A successor orchestrator opens as a new tab in its predecessor's own zellij session (founder 2026-10-31):
-  `zellij -s <s> action new-tab --name <seat> --cwd <dir>`, only while `action list-clients` shows a client; start it
-  by pane id (`action list-panes -t -c` → `action write-chars -p terminal_N …` + `action write -p terminal_N 13`),
-  with the prompt in a file and a launch script (fish reads `(…)` in an inline prompt as a command). No client
-  attached: reuse an idle tab there by pane id, else `zj-spawn <new-session> <cwd> <cmd…>`. Unattended, plain
-  `rename-tab`, `go-to-tab-name` and `write-chars` without `-p` silently do nothing (tested 2026-10-15).
-  Persistent session `main`: `zellij attach main`, never bare `zellij` (creates
-  strays). Recreated at boot by the user unit `zellij-main.service`.
-- RAM: 32 GB. EVERY zellij session runs inside the user slice `zellij.slice`
+  (Claude Code history and memory are keyed by path). One project = one founder tab, opened by hand.
+  Persistent session `main`: `zellij attach main`, never bare `zellij` (creates strays);
+  `zellij-main.service` recreates it at boot. Seats: `~/dev/build-loop/seats.md`.
+- RAM: 32 GB. EVERY `claude` and zellij session runs inside the user slice `zellij.slice`
   (MemoryHigh=24G, MemoryMax=26G since 2026-10-17; 18/20 thrashed), so everything started in them (Claude Code, cargo,
   node) shares one 26 GB cap; production keeps a guaranteed 4 GB (system.slice MemoryLow, osnova-infra). Starting from SSH is fine: the fish
-  `zellij` function wraps it in `systemd-run --user --scope --slice=zellij.slice`, and zj-spawn and
-  zellij-main.service join the same slice (since 2026-10-15; before that, SSH-started sessions were
-  uncapped). Check: `systemctl --user status zellij.slice`. earlyoom prefers killing
+  `zellij` and `claude` functions call `in-slice` (`in-slice <cmd>` for anything else), and zj-spawn and
+  zellij-main.service join the same slice. Check: `systemctl --user status zellij.slice`. earlyoom prefers killing
   cargo/rustc/clippy/rust-analyzer/node/python3 and never
   claude/zellij/postgres/docker/sshd/tailscaled. Check with `free -m`. Truly
   huge builds go outside zellij: `systemd-run --user -p MemoryMax=8G --scope cargo …`.
