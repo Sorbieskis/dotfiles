@@ -17,7 +17,7 @@ Public 22 is closed (UFW) and filtered (netcup SCP policy `osnova-vps`, 2026-09-
   (git.osnovasystems.com, +registry, SSH :222), Pocket-ID, osnova-product +
   staging, Postgres, Dockge, diun, livesync (CouchDB + bridge), forgejo-runner
   (host unit), nginx modpack site :8080, vault-door (mcp.osnovasystems.com, the
-  claude.ai connector: one save tool into `~/vault/0_inbox/claude-ai/`, read tools over a snapshot).
+  claude.ai connector: two save tools (`save_note`, `save_file`) into `~/vault/0_inbox/claude-ai/`, read tools over a snapshot of the whole pushed vault).
 - Minecraft: stopped and disabled, stack at `/opt/stacks/minecraft`, world +
   backups migrated, now a 7 GB cap and `restart: on-failure` (the old
   idle-restart churn is gone). Start: `sudo systemctl enable --now minecraft.service`.
