@@ -38,8 +38,8 @@ Public 22 is closed (UFW) and filtered (netcup SCP policy `osnova-vps`, 2026-09-
 - RAM: 32 GB. EVERY `claude` and zellij session runs inside the user slice `zellij.slice`
   (MemoryHigh=24G, MemoryMax=26G since 2026-10-17; 18/20 thrashed), so everything started in them (Claude Code, cargo,
   node) shares one 26 GB cap; production keeps a guaranteed 4 GB (system.slice MemoryLow, osnova-infra). Starting from SSH is fine: the fish
-  `zellij` and `claude` functions call `in-slice` (`in-slice <cmd>` for anything else), and zj-spawn and
-  zellij-main.service join the same slice. Check: `systemctl --user status zellij.slice`. earlyoom prefers killing
+  `zellij` and `claude` functions call `in-slice` (`in-slice <cmd>` for anything else); the
+  zellij-main.service joins the same slice. Check: `systemctl --user status zellij.slice`. earlyoom prefers killing
   cargo/rustc/clippy/rust-analyzer/node/python3 and never
   claude/zellij/postgres/docker/sshd/tailscaled. Check with `free -m`. Truly
   huge builds go outside zellij: `systemd-run --user -p MemoryMax=8G --scope cargo …`.
