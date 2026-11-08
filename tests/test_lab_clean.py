@@ -30,10 +30,16 @@ with open(os.environ["FAKE_DOCKER_LOG"], "a") as f:
 if a[:2] == ["container", "ls"]:
     print("\n".join(c["id"] for c in w["containers"]))
 elif a[:2] == ["container", "inspect"]:
-    ids = a[a.index("--format") + 2:]
+    ids = a[2:]
+    seen = [json.loads(l) for l in open(os.environ["FAKE_DOCKER_LOG"]) if l.strip()]
+    out = []
     for c in w["containers"]:
         if c["id"] in ids:
-            print("\t".join([c["id"], "/" + c["name"], c.get("tier", ""), c["image"]]))
+            n = sum(1 for x in seen if x[:2] == ["container", "inspect"] and c["id"] in x)
+            tier = "" if (c["id"] in w.get("flip", []) and n >= 2) else c.get("tier", "")
+            name = "other" if (c["id"] in w.get("rename", []) and n >= 2) else c["name"]
+            out.append({"Id": c["id"], "Name": "/" + name, "Image": c["image"], "Config": {"Labels": {"tier": tier}}})
+    print(json.dumps(out))
 elif a[:2] == ["image", "ls"]:
     for i in w["images"]:
         print(f'{i["id"]}\t{i["repo"]}\t{i["tag"]}')
@@ -73,6 +79,7 @@ WORLD = {
         {"id": "sha256:img-pin", "repo": "pinned", "tag": "m11-pin"},
         {"id": "sha256:img-other", "repo": "vault-door", "tag": "m12-final"},
     ],
+    "flip": [],
     "digests": {"sha256:img-mirror": ["mirror@sha256:" + "d" * 64]},
 }
 # img-used is also run by a surviving container
@@ -174,7 +181,84 @@ class Removal(Base):
         self.assertIn("removed 0 container(s), 0 image(s)", out)
 
 
+class Hostile(Base):
+    def test_a_label_with_tabs_and_newlines_cannot_forge_a_container_row(self):
+        w = json.loads(json.dumps(WORLD))
+        forged = "x\tsha256:a\n" + "ee" * 32 + "\tlab-m11-zz\tlab"
+        w["containers"].append({"id": "ab" * 32, "name": "evil", "tier": forged, "image": "sha256:img-other"})
+        w["containers"].append({"id": "ee" * 32, "name": "caddy-prod", "tier": "", "image": "sha256:img-prod"})
+        self.world(w)
+        self.run_main("m11", "--yes")
+        self.assertNotIn(["rm", "-f", "ee" * 32], self.removals())
+        self.assertNotIn(["rm", "-f", "ab" * 32], self.removals())
+
+    def test_a_container_that_changed_after_the_plan_is_not_removed(self):
+        w = json.loads(json.dumps(WORLD))
+        w["flip"] = ["c1" * 32]
+        self.world(w)
+        rc, _, err = self.run_main("m11", "--yes")
+        self.assertEqual(rc, 1)
+        self.assertIn("changed since the plan", err)
+        self.assertNotIn(["rm", "-f", "c1" * 32], self.removals())
+
+
+class Renamed(Base):
+    def test_a_container_renamed_after_the_plan_is_not_removed(self):
+        w = json.loads(json.dumps(WORLD))
+        w["rename"] = ["c1" * 32]
+        self.world(w)
+        rc, _, err = self.run_main("m11", "--yes")
+        self.assertEqual(rc, 1)
+        self.assertNotIn(["rm", "-f", "c1" * 32], self.removals())
+
+
 class Fail_closed(Base):
+    def compose(self, name, body, sub="app"):
+        d = os.path.join(self.stacks, sub)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, name), "w") as f:
+            f.write(body)
+
+    def test_unreadable_subdirectory_refuses(self):
+        if os.geteuid() == 0:
+            self.skipTest("root reads everything")
+        self.compose("docker-compose.yml", "services: {}\n", sub="deep")
+        d = os.path.join(self.stacks, "deep")
+        os.chmod(d, 0)
+        rc, _, err = self.run_main("m11", "--yes")
+        os.chmod(d, 0o755)
+        self.assertEqual(rc, 2)
+        self.assertIn("cannot read", err)
+        self.assertEqual(self.removals(), [])
+
+    def test_image_forms_that_are_not_a_plain_scalar_refuse(self):
+        for line in ("image: *base", "image: >-", '"image": thing:1', "{image: thing:1}", "image:", "image: ${R}:1", "image: reg.io/${R}:1"):
+            with self.subTest(line=line):
+                self.compose("extra.yaml", "services:\n  z:\n    %s\n" % line, sub="x")
+                rc, _, err = self.run_main("m11", "--yes")
+                self.assertEqual(rc, 2, line)
+                self.assertEqual(self.removals(), [])
+
+    def test_yaml_suffix_and_symlinked_stack_dirs_are_scanned(self):
+        real = os.path.join(self.tmp.name, "real")
+        os.makedirs(real)
+        with open(os.path.join(real, "compose.yaml"), "w") as f:
+            f.write("services:\n  a:\n    image: vault-door:1\n")
+        os.symlink(real, os.path.join(self.stacks, "linked"))
+        _, out, _ = self.run_main("m11")
+        self.assertIn("kept image vault-door:m11-final (repo is in a prod compose)", out)
+
+    def test_an_image_id_in_a_compose_file_keeps_the_image(self):
+        self.compose("pin.yml", "# built as sha256:img-m11\n", sub="x")
+        _, out, _ = self.run_main("m11")
+        self.assertIn("kept image vault-door:m11 (a prod compose references it)", out)
+
+    def test_registry_prefixes_do_not_hide_a_prod_repo(self):
+        self.compose("p.yml", "services:\n  a:\n    image: docker.io/library/scratch:1\n", sub="x")
+        _, out, _ = self.run_main("m11")
+        self.assertIn("kept image scratch:lab-m11-x (repo is in a prod compose)", out)
+
+
     def test_unreadable_compose_refuses_image_removal_and_removes_nothing(self):
         if os.geteuid() == 0:
             self.skipTest("root reads everything")
@@ -184,14 +268,6 @@ class Fail_closed(Base):
         os.chmod(p, 0o644)
         self.assertEqual(rc, 2)
         self.assertIn("cannot read", err)
-        self.assertEqual(self.removals(), [])
-
-    def test_interpolated_image_refuses_everything(self):
-        with open(os.path.join(self.stacks, "app", "docker-compose.yml"), "a") as f:
-            f.write("  c:\n    image: ${REG}/thing:1\n")
-        rc, _, err = self.run_main("m11", "--yes")
-        self.assertEqual(rc, 2)
-        self.assertIn("interpolated image", err)
         self.assertEqual(self.removals(), [])
 
     def test_docker_failure_is_reported_not_swallowed(self):
@@ -206,14 +282,19 @@ class Arguments(Base):
         return subprocess.run([sys.executable, SCRIPT, *argv], capture_output=True, text=True, env=self.env)
 
     def test_bad_arguments_are_refused_before_docker_is_called(self):
-        bad = ["m11 caddy", "m11;ls", "m11&&ls", "$(id)", "m 11", "lab", "caddy", "M11", "m11/x", "m11*", "../m11",
-               "m11--x", "-m11", "m11-", "", "m", "m" * 61 + "1", "m11\n"]
+        bad = ["2026", "2026-11", "door-widened", "m11-x", "m1x", "2026-1-x", "m" + "1" * 60, "2026-11-" + "x" * 60,
+               "m11 caddy", "m11;ls", "m11&&ls", "$(id)", "m 11", "lab", "caddy", "M11", "m11/x", "m11*", "../m11",
+               "m11--x", "-m11", "m11-", "", "m", "m11\n"]
         for a in bad:
             with self.subTest(arg=a):
                 r = self.cli(a, "--yes")
                 self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
                 self.assertIn("lab-clean:", r.stderr)
         self.assertEqual(self.calls(), [])
+
+    def test_slug_length_limit_is_60_inclusive(self):
+        self.assertEqual(self.cli("2026-11-" + "x" * 52).returncode, 0)
+        self.assertEqual(self.cli("2026-11-" + "x" * 53).returncode, 2)
 
     def test_a_second_name_is_refused(self):
         r = self.cli("m11", "m12", "--yes")
