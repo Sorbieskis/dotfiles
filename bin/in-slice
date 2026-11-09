@@ -6,4 +6,5 @@
 if grep -q zellij.slice /proc/self/cgroup || ! systemctl --user -q is-active default.target 2>/dev/null; then
   exec "$@"
 fi
-exec systemd-run --user --scope --slice=zellij.slice --quiet --collect -- "$@"
+# unique unit name: systemd derives the default from pid + pidfd, both kept across exec, so a second scope from the same process would fail "already loaded"
+exec systemd-run --user --scope --slice=zellij.slice --unit="in-slice-$$-$(date +%s%N)" --quiet --collect -- "$@"
