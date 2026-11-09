@@ -1,0 +1,14 @@
+[Unit]
+Description=obs sessions --sample — one row of the Claude-session census (M5 P4)
+# Appends ONE line to ~/.local/state/obs/sessions.jsonl (obs's own state); reads `claude agents --json --all`,
+# ~/.claude/sessions, /proc and the zellij.slice cgroup. obs runs from the live ~/dev/osnova-product checkout
+# (~/.local/bin/obs is a symlink), so an off-master checkout shows as a gap > 65 min (`partial`), by design.
+
+[Service]
+Type=oneshot
+# the user manager's PATH lacks ~/.local/bin, where `claude` lives
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/bin/obs sessions --sample --line
+Nice=10
+MemoryMax=512M
+TimeoutStartSec=120
