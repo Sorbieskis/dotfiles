@@ -36,6 +36,9 @@ class NoSelfMatch(unittest.TestCase):
     def test_wait_loop_full_flag_denied(self):
         self.assertDenied('until ! pgrep --full "[b]in/check"; do sleep 5; done')
 
+    def test_loop_body_bracket_pgrep_passes(self):
+        self.assertPassed("while read l; do pgrep -f '[x]yz'; done")
+
     def test_one_shot_bracket_pgrep_passes(self):
         self.assertPassed("pgrep -f '[b]in/check'")
 
