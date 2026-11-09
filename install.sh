@@ -60,7 +60,7 @@ if [ -n "$fish" ] && [ "$(getent passwd "$USER" | cut -d: -f7)" != "$fish" ]; th
 echo "==> user services (start at boot only with linger: sudo loginctl enable-linger $USER)"
 if command -v systemctl >/dev/null 2>&1; then
     systemctl --user daemon-reload
-    systemctl --user enable --now box-hub.service site-preview.service zellij-main.service zellij-main.timer oikoumene-check.timer vault-snapshot.timer || true
+    systemctl --user enable --now box-hub.service site-preview.service zellij-main.service zellij-main.timer oikoumene-check.timer vault-snapshot.timer obs-sessions.timer || true
 fi
 
 echo "==> crontab: hourly vault push"
