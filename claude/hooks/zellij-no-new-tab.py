@@ -4,8 +4,8 @@
 On zellij 0.45.1, `zellij -s <s> action new-tab` on a session with no client attached leaves a broken tab,
 and the next client attach panics the server ("failed to attach client N to tab with index M"), killing
 every pane in it. It took down `osnova` on 2026-10-14 and 2026-10-15 (an orchestrator launching its
-successor at night); reproduced in a throwaway session 2026-10-15. Agents run unattended, so "only when
-someone is attached" cannot be guaranteed: the safe path is a new detached session via `zj-spawn`.
+successor at night); reproduced in a throwaway session 2026-10-15. Agents run unattended, so new-tab is
+allowed only while a client is attached; with none, a successor orchestrator waits for the founder to attach (seats.md row 4).
 """
 import json, re, shlex, sys
 
