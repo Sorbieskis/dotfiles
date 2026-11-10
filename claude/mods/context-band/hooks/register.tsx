@@ -12,7 +12,7 @@ import type { Register } from 'claude-code'
 import type { Ctx } from '../types'
 
 const RESUME = 150_000
-const HANDOFF = 190_000
+const HANDOFF = 170_000
 const HARD_STOP = 300_000
 
 const ctxAtom = atom({ plugin: 'context-band', key: 'ctx' } as const, null)

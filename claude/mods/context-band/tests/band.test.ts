@@ -20,7 +20,7 @@ async function draw($: any, on: any, context: any): Promise<string | null> {
   return hit ? (hit.text as string) : null
 }
 
-// Styling is part of the contract: past 190k the band must be bold red inverse, 150k-189k yellow,
+// Styling is part of the contract: past 170k the band must be bold red inverse, 150k-169k yellow,
 // below that dim. Exact thresholds are tested on both sides (>= comparisons).
 const RED = { bold: true, inverse: true, color: 'red' }
 const YELLOW = { color: 'yellow' }
@@ -31,8 +31,8 @@ for (const [name, tokens, want, props] of [
   ['under 150k', 120000, /^context 120k \/ 1000k \(12%\)$/, DIM],
   ['149999 is still dim', 149999, /^context 150k \/ 1000k/, DIM],
   ['at 150k', 150000, /resume ceiling/, YELLOW],
-  ['just under 190k', 189999, /resume ceiling/, YELLOW],
-  ['at 190k', 190000, /HAND OFF/, RED],
+  ['just under 170k', 169999, /resume ceiling/, YELLOW],
+  ['at 170k', 170000, /HAND OFF/, RED],
   ['299999 is HAND OFF, not HARD STOP', 299999, /HAND OFF/, RED],
   ['exactly 300k', 300000, /HARD STOP/, RED],
   ['over 300k', 310000, /HARD STOP/, RED],
