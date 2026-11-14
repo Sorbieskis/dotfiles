@@ -3,7 +3,7 @@ Description=vault-snapshot — read-only snapshot of the pushed vault for the cl
 OnFailure=vault-snapshot-failed.service
 # Writes ONLY ~/.cache/vault-snapshot (a derived cache the vault-door container mounts read-only);
 # reads the vault's origin/main with git archive, never the work tree. Fails closed on any gitleaks problem.
-# A failed run sends one fixed ntfy via OnFailure= (vault-snapshot-failed.service).
+# A failed or hung (>20 min) run sends one fixed ntfy via OnFailure= (vault-snapshot-failed.service).
 # Never delete ~/.cache/vault-snapshot while vault-door runs: it orphans the door's mount; `./scripts/deploy.sh vault-door` in ~/dev/osnova-infra recovers (its CLAUDE.md).
 
 [Service]
@@ -11,3 +11,4 @@ Type=oneshot
 ExecStart=%h/.local/bin/vault-snapshot
 Nice=10
 MemoryMax=1G
+TimeoutStartSec=20min

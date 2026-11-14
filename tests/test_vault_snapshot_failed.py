@@ -58,6 +58,7 @@ class VaultSnapshotFailedTest(unittest.TestCase):
         with open(SNAPSHOT_UNIT) as f:
             lines = [ln.strip() for ln in f]
         self.assertIn("OnFailure=vault-snapshot-failed.service", lines)
+        self.assertIn("TimeoutStartSec=20min", lines)
 
 
 if __name__ == "__main__":
