@@ -1,0 +1,12 @@
+#!/bin/bash
+# OnFailure= handler of vault-snapshot.service: any failed run (non-zero exit, crash, missing interpreter)
+# sends ONE generic ntfy. The message is fixed: never a finding, a vault path or gitleaks output.
+# A systemd OnFailure unit fires even when bin/vault-snapshot cannot start, which is why this is a unit.
+# Test hooks (env): NTFY_TOPIC_FILE (default /etc/osnova/ntfy-ci-topic).
+TOPIC_FILE=${NTFY_TOPIC_FILE:-/etc/osnova/ntfy-ci-topic}
+topic=$(cat "$TOPIC_FILE" 2>/dev/null || true)
+echo "$(date '+%F %T') vault-snapshot failed, notifying"
+[ -n "$topic" ] && curl -fsS -m 20 -H "Title: vault snapshot" \
+    -d "vault-snapshot failed: the claude.ai door serves the last snapshot; see journalctl --user -u vault-snapshot" \
+    "https://ntfy.sh/$topic" >/dev/null || true
+exit 0

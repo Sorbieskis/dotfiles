@@ -1,0 +1,6 @@
+[Unit]
+Description=vault-snapshot failure notice (ntfy, fixed message; OnFailure= of vault-snapshot.service)
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/vault-snapshot-failed
