@@ -1,5 +1,5 @@
 [Unit]
-Description=Hourly oikoumene-check (vault integrity, token-free)
+Description=Hourly nexus-fatorum-check (vault integrity, token-free)
 
 [Timer]
 OnCalendar=hourly

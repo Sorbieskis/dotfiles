@@ -1,14 +1,14 @@
 #!/bin/bash
-# Hourly token-free integrity check of the Oikoumene vault project (no Claude involved).
-# Runs `corpus check <project> --brief` (~/dev/oikoumene-corpus), keeps the exit status in
-# ~/.cache/oikoumene-check/last and the output in last.txt, and sends ntfy ONLY on a transition:
+# Hourly token-free integrity check of the Nexus Fatorum vault project (no Claude involved).
+# Runs `corpus check <project> --brief` (~/dev/nexus-fatorum-corpus), keeps the exit status in
+# ~/.cache/nexus-fatorum-check/last and the output in last.txt, and sends ntfy ONLY on a transition:
 # ok -> fail ("N errors, see last.txt") and fail -> ok ("clean again"). The findings themselves
 # are never sent. Same ntfy mechanism as vault-backup.sh (topic from /etc/osnova/ntfy-ci-topic,
 # curl -fsS -m 20, a failed notification is ignored). The first run counts as coming from ok.
 # Test hooks (env): PROJECT_DIR, STATE_DIR, NTFY_CMD (receives the message as $1), UV_BIN.
 set -uo pipefail
-PROJECT_DIR=${PROJECT_DIR:-/home/dima/vault/1_projects/oikoumene}
-STATE_DIR=${STATE_DIR:-/home/dima/.cache/oikoumene-check}
+PROJECT_DIR=${PROJECT_DIR:-/home/dima/vault/1_projects/nexus-fatorum}
+STATE_DIR=${STATE_DIR:-/home/dima/.cache/nexus-fatorum-check}
 UV_BIN=${UV_BIN:-$(command -v uv || echo /home/dima/.local/share/mise/shims/uv)}
 mkdir -p "$STATE_DIR"
 
@@ -16,7 +16,7 @@ notify() {
     echo "$(date '+%F %T') $1"
     if [ -n "${NTFY_CMD:-}" ]; then "$NTFY_CMD" "$1" || true; return; fi
     local topic; topic=$(cat /etc/osnova/ntfy-ci-topic 2>/dev/null || true)
-    [ -n "$topic" ] && curl -fsS -m 20 -H "Title: oikoumene check" -d "$1" "https://ntfy.sh/$topic" >/dev/null || true
+    [ -n "$topic" ] && curl -fsS -m 20 -H "Title: nexus-fatorum check" -d "$1" "https://ntfy.sh/$topic" >/dev/null || true
 }
 
 prev=0
@@ -24,20 +24,20 @@ prev=0
 case "$prev" in ''|*[!0-9]*) prev=0 ;; esac
 
 rc=0
-"$UV_BIN" run --quiet --project /home/dima/dev/oikoumene-corpus corpus check "$PROJECT_DIR" --brief \
+"$UV_BIN" run --quiet --project /home/dima/dev/nexus-fatorum-corpus corpus check "$PROJECT_DIR" --brief \
     >"$STATE_DIR/last.txt.new" 2>&1 || rc=$?
 mv "$STATE_DIR/last.txt.new" "$STATE_DIR/last.txt"
 echo "$rc" >"$STATE_DIR/last"
-echo "$(date '+%F %T') oikoumene-check: exit $rc ($(head -n1 "$STATE_DIR/last.txt"))"
+echo "$(date '+%F %T') nexus-fatorum-check: exit $rc ($(head -n1 "$STATE_DIR/last.txt"))"
 
 if [ "$prev" -eq 0 ] && [ "$rc" -ne 0 ]; then
     if [ "$rc" -eq 1 ]; then
         n=$(sed -n '1s/^corpus check: \([0-9]*\) errors.*/\1/p' "$STATE_DIR/last.txt")
-        notify "oikoumene check failing: ${n:-?} errors, see ~/.cache/oikoumene-check/last.txt"
+        notify "nexus-fatorum check failing: ${n:-?} errors, see ~/.cache/nexus-fatorum-check/last.txt"
     else
-        notify "oikoumene check could not run (exit $rc), see ~/.cache/oikoumene-check/last.txt"
+        notify "nexus-fatorum check could not run (exit $rc), see ~/.cache/nexus-fatorum-check/last.txt"
     fi
 elif [ "$prev" -ne 0 ] && [ "$rc" -eq 0 ]; then
-    notify "oikoumene check clean again"
+    notify "nexus-fatorum check clean again"
 fi
 exit 0

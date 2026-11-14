@@ -187,7 +187,7 @@ class ScopeTests(Base):
                 "3_personal/d.md", "2_areas/finances/e.md", "belle/f.md", "journal/g.md", "5_archive/h.md",
                 "0_inbox/i.md", "0_inbox/claude-ai/j.md", "excalidraw/k.md", "CLAUDE.md", "Untitled 1.md",
                 "1_projects/belle_masters_2027/l.md", "2_areas/x/Journal.md"]
-        deny = [".obsidian/m.md", ".trash/n.md", ".stversions/o.md", "1_projects/oikoumene/sources/.corpus/p.md"]
+        deny = [".obsidian/m.md", ".trash/n.md", ".stversions/o.md", "1_projects/nexus-fatorum/sources/.corpus/p.md"]
         for rel in keep + deny:
             self.put(rel)
         self.commit()

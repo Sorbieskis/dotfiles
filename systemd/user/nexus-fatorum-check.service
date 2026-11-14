@@ -1,11 +1,11 @@
 [Unit]
-Description=oikoumene-check — token-free integrity check of the Oikoumene vault project (corpus check)
-# Runs ~/dev/oikoumene-corpus `corpus check ~/vault/1_projects/oikoumene --brief`; no Claude involved. Result in
-# ~/.cache/oikoumene-check/{last,last.txt}; ntfy only when it flips between clean and failing (see the script).
-ConditionPathExists=%h/dev/oikoumene-corpus/pyproject.toml
+Description=nexus-fatorum-check — token-free integrity check of the Nexus Fatorum vault project (corpus check)
+# Runs ~/dev/nexus-fatorum-corpus `corpus check ~/vault/1_projects/nexus-fatorum --brief`; no Claude involved. Result in
+# ~/.cache/nexus-fatorum-check/{last,last.txt}; ntfy only when it flips between clean and failing (see the script).
+ConditionPathExists=%h/dev/nexus-fatorum-corpus/pyproject.toml
 
 [Service]
 Type=oneshot
-ExecStart=%h/.local/bin/oikoumene-check
+ExecStart=%h/.local/bin/nexus-fatorum-check
 # the check reads markdown and runs one short Python process
 MemoryMax=1G
